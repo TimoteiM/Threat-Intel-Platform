@@ -28,6 +28,8 @@ def run_collector(
     collector_name: str,
     investigation_id: str,
     timeout: int = 30,
+    observable_type: str = "domain",
+    file_artifact_id: str | None = None,
 ) -> dict:
     """
     Execute a single collector and return serialized results.
@@ -41,7 +43,10 @@ def run_collector(
             "artifacts": { "dns_raw_records": "<base64>" },
         }
     """
-    logger.info(f"[{investigation_id}] Running collector: {collector_name} for {domain}")
+    logger.info(
+        f"[{investigation_id}] Running collector: {collector_name} for {domain} "
+        f"(type={observable_type})"
+    )
 
     collector_cls = get_collector(collector_name)
     if not collector_cls:
@@ -58,6 +63,8 @@ def run_collector(
         domain=domain,
         investigation_id=investigation_id,
         timeout=timeout,
+        observable_type=observable_type,
+        file_artifact_id=file_artifact_id,
     )
 
     evidence, meta, raw_artifacts = collector.run()

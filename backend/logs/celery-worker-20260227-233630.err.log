@@ -1,0 +1,10 @@
+[2026-02-27 23:36:34,373: INFO/MainProcess] Connected to redis://127.0.0.1:6379/5
+[2026-02-27 23:36:34,384: INFO/MainProcess] mingle: searching for neighbors
+[2026-02-27 23:36:35,441: WARNING/MainProcess] C:\Users\tmoscaliuc\Downloads\script\threat-investigator\threat-intel\backend\venv\Lib\site-packages\celery\app\control.py:56: DuplicateNodenameWarning: Received multiple replies from node name: celery@EXP-JFW2P34.
+Please make sure you give each node a unique nodename using
+the celery worker `-n` option.
+  warnings.warn(DuplicateNodenameWarning(
+
+[2026-02-27 23:36:35,441: INFO/MainProcess] mingle: sync with 1 nodes
+[2026-02-27 23:36:35,442: INFO/MainProcess] mingle: sync complete
+[2026-02-27 23:36:35,484: INFO/MainProcess] celery-local-8015-20260227-233630@EXP-JFW2P34 ready.

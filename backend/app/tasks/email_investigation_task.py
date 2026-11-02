@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+
+from app.db.session import sync_engine
+from app.models.database import EmailInvestigationRun
+from app.services.email_investigation_processing_service import (
+    prepare_history_payload,
+    process_email_investigation,
+)
+from app.tasks.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
+
+
+def _update_run(run_uuid: uuid.UUID, *, result_json_patch: dict | None = None, **fields) -> bool:
+    with Session(sync_engine) as db:
+        run = db.get(EmailInvestigationRun, run_uuid)
+        if not run:
+            return False
+        current_status = str((run.result_json or {}).get("status") or "").lower()
+        if current_status == "cancelled":
+            return False
+        if result_json_patch:
+            merged = dict(run.result_json or {})
+            merged.update(result_json_patch)
+            run.result_json = merged
+
+            # The row has its own status and completed_at columns, and nothing
+            # was writing them — every run in the table read "queued" for ever,
+            # because the API takes status from result_json and never noticed.
+            # Harmless to the UI, fatal to any SQL asked how long a run took.
+            if "status" in result_json_patch:
+                run.status = str(result_json_patch["status"] or "queued")
+            if "error" in result_json_patch:
+                run.error = result_json_patch.get("error")
+            finished = result_json_patch.get("completed_at")
+            if finished:
+                try:
+                    run.completed_at = datetime.fromisoformat(str(finished))
+                except (TypeError, ValueError):
+                    run.completed_at = datetime.now(timezone.utc)
+        for key, value in fields.items():
+            setattr(run, key, value)
+        db.commit()
+        return True
+
+
+@celery_app.task(bind=True, name="tasks.run_email_investigation", time_limit=900, soft_time_limit=840)
+def run_email_investigation(
+    self,
+    run_id: str,
+    file_path: str,
+    *,
+    context: str = "",
+    max_urls: int = 20,
+    max_attachment_hashes: int = 5,
+    include_url_screenshots: bool = False,
+    run_anyrun: bool = False,
+    run_ai: bool = True,
+    ml_phishing_score: str | None = None,
+) -> str:
+    try:
+        parsed_id = uuid.UUID(run_id)
+    except ValueError:
+        logger.error("Invalid email investigation run_id: %s", run_id)
+        return run_id
+
+    with Session(sync_engine) as db:
+        run = db.get(EmailInvestigationRun, parsed_id)
+        if not run:
+            logger.error("Email investigation run not found: %s", run_id)
+            return run_id
+        if str((run.result_json or {}).get("status") or "").lower() == "cancelled":
+            logger.info("Email investigation already cancelled before start: %s", run_id)
+            return run_id
+        run_filename = run.filename
+        # Read here, inside the session that already loaded the row, so the
+        # recorder does not re-query for it later.
+        run_actor = {
+            "actor_kind": run.actor_kind,
+            "actor_user_id": run.actor_user_id,
+            "actor_recorded": run.actor_recorded,
+        }
+
+    _update_run(
+        parsed_id,
+        result_json_patch={
+            "status": "processing",
+            "error": None,
+        },
+    )
+
+    try:
+        logger.info("Email investigation %s starting — run_anyrun=%s run_ai=%s", run_id, run_anyrun, run_ai)
+        with open(file_path, "rb") as fh:
+            payload = fh.read()
+
+        response_payload = asyncio.run(
+            process_email_investigation(
+                payload=payload,
+                filename=run_filename,
+                context=context,
+                max_urls=max_urls,
+                max_attachment_hashes=max_attachment_hashes,
+                include_url_screenshots=include_url_screenshots,
+                run_anyrun=run_anyrun,
+                run_ai=run_ai,
+                ml_phishing_score=ml_phishing_score,
+            )
+        )
+
+        _record_investigation(parsed_id, response_payload, run_actor)
+
+        _update_run(
+            parsed_id,
+            email_subject=str(response_payload.get("email_subject") or "")[:512] or None,
+            sender_email=response_payload.get("sender_email"),
+            sender_domain=response_payload.get("sender_domain"),
+            sender_ip=response_payload.get("sender_ip"),
+            resolution_source=str(response_payload.get("resolution_source") or "unknown"),
+            result_json_patch={
+                **prepare_history_payload(response_payload),
+                "status": "completed",
+                "error": None,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as exc:
+        _update_run(
+            parsed_id,
+            result_json_patch={
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        logger.exception("Email investigation run failed: %s", run_id)
+    finally:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except OSError:
+            logger.warning("Could not remove temporary email payload: %s", file_path)
+
+    return run_id
+
+
+def _record_investigation(run_uuid: uuid.UUID, payload: dict,
+                          actor: dict | None = None) -> None:
+    """Write the investigation record. Fail-open, by contract.
+
+    A recording bug must never take an investigation down — this is a
+    narration of the pipeline, not part of it. The loud half is on the record
+    itself: `incomplete_steps` names every step that failed to record, and the
+    page says so above the chain, so a short chain is a visible gap rather
+    than a plausible investigation.
+
+    The actor comes from the run, which captures it at upload. A run from
+    before that existed carries `predates_attribution` — an actor existed and
+    was not recorded, which is a different claim from `automated_ingest`.
+    """
+    try:
+        from app.models.database import ACTOR_PREDATES_ATTRIBUTION
+        from app.services.email_investigation_steps import derive
+        from app.services.investigation_recorder import (
+            InvestigationRecorder, persist_sync,
+        )
+
+        pair = dict(actor or {})
+        recorder = InvestigationRecorder(
+            origin_surface="email",
+            origin_id=str(run_uuid),
+            actor_kind=pair.get("actor_kind") or ACTOR_PREDATES_ATTRIBUTION,
+            actor_user_id=pair.get("actor_user_id"),
+            actor_recorded=pair.get("actor_recorded"),
+        )
+        derive(payload or {}, recorder)
+        resolution = (payload or {}).get("resolution") or {}
+        verdict = str(
+            resolution.get("overall_verdict")
+            or resolution.get("classification")
+            or ""
+        ) or None
+        with Session(sync_engine) as db:
+            persist_sync(recorder, db, verdict=verdict)
+    except Exception:  # noqa: BLE001
+        logger.exception("investigation record not written for %s", run_uuid)

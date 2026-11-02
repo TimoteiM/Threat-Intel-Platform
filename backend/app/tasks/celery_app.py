@@ -8,6 +8,7 @@ Worker startup: celery -A app.tasks.celery_app worker --loglevel=info
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.config import get_settings
 
@@ -30,13 +31,159 @@ celery_app.conf.update(
     task_time_limit=120,           # Hard kill after 2 min
     task_soft_time_limit=90,       # Raise SoftTimeLimitExceeded after 90s
     task_acks_late=True,           # Ack after completion (not on receive)
+    # With acks_late a task killed mid-flight stays unacknowledged and Redis
+    # redelivers it once this expires. It must stay ABOVE the longest task's
+    # time limit (alert runs allow 1800s) or a still-running task gets handed to
+    # a second worker and the investigation runs twice. Stated here because the
+    # value was previously an inherited default nobody had chosen, and lowering
+    # it is the obvious-looking way to make recovery faster — it is not.
+    # Fast recovery is tasks.recover_stuck_alert_runs, which verifies liveness.
+    broker_transport_options={"visibility_timeout": 3600},
+    task_reject_on_worker_lost=True,
 
     # Performance
-    worker_prefetch_multiplier=1,  # One task at a time per worker process
-    worker_concurrency=4,          # 4 parallel worker processes
+    # Use threads pool — prefork (billiard) fails on Windows with WinError 5/6
+    # (shared-memory semaphores don't work reliably on Windows).
+    # Threads are fine here: all tasks are I/O-bound (HTTP, DNS, DB).
+    worker_pool="threads",
+    worker_prefetch_multiplier=1,  # One task at a time per worker thread
+    worker_concurrency=8,          # 8 concurrent I/O threads
 
     # Task routing (optional — all tasks go to default queue for now)
     task_default_queue="investigations",
+
+    # Celery Beat — periodic task schedule
+    beat_schedule={
+        # Is the pipeline producing verdicts at all?
+        #
+        # On 2026-10-09 it was not, for 2h38m, and the only signal was a person
+        # looking at a screen: a worker dying on every task and a worker with
+        # nothing to do produce the same queue. Every two minutes, because the
+        # measurement is two counts and the cost of missing a stall is every
+        # alert that arrives during it.
+        "pipeline-stall-watch": {
+            "task": "app.tasks.pipeline_watch_task.watch_pipeline",
+            "schedule": crontab(minute="*/2"),
+        },
+        # And the cause rather than the symptom: this container's code
+        # expecting a column the database does not have, which is what a
+        # migration without a rebuild leaves behind. Hourly is enough — the
+        # fault is created by a deploy, not by traffic — and the worker also
+        # checks once at startup.
+        "schema-drift-watch": {
+            "task": "app.tasks.pipeline_watch_task.watch_schema",
+            "schedule": crontab(minute=7),
+        },
+        # And the layer above both: whether each source is still sending.
+        # The queue watchdog cannot see this, because an alert that never
+        # arrives is never queued — which is how appsec-agent and Fortigate,
+        # 17.7% and 16.6% of alert volume, went silent for 17 and 22 days with
+        # nothing to show it. Twice a day: the measurement reads a few hundred
+        # bodies, and the unit of this fault is days rather than minutes.
+        # The graph tables are a cache, and until 2026-10-12 their only writer
+        # was a CLI run by hand — so every figure drawn from them was as of
+        # whenever somebody last remembered. Two alerts carrying a corroborated
+        # ATT&CK technique had no graph rows at all. Every two minutes, because
+        # the cost of a stale graph is a case page that understates what is
+        # known about an incident.
+        "graph-materialisation-sweep": {
+            "task": "app.tasks.pipeline_watch_task.materialise_graphs",
+            "schedule": crontab(minute="*/2"),
+        },
+        # Volume against each emitter's own baseline, by source AND by host.
+        # SHADOW: it computes and logs and alarms on nothing, because the
+        # threshold has to come from a week of its own output rather than from
+        # a number somebody picked. Four times a day is enough to accumulate
+        # that evidence without re-reading 60 days of history every few
+        # minutes.
+        "emitter-freshness-shadow": {
+            "task": "app.tasks.pipeline_watch_task.emitter_freshness_shadow",
+            "schedule": crontab(hour="2,8,14,20", minute=17),
+        },
+        "ingest-freshness-watch": {
+            "task": "app.tasks.pipeline_watch_task.watch_ingest",
+            "schedule": crontab(hour="6,18", minute=11),
+        },
+        # Re-ask about addresses whose stored verdict has aged past the 30 days
+        # at which the indicator panel starts marking it old. 800 are due as of
+        # 2026-10-12, median 56 days; at 150 a run they drain in under a week.
+        # Once daily and early, because this spends AbuseIPDB quota that an
+        # analyst's own lookup has first claim on during the working day.
+        "ip-lookup-refresh": {
+            "task": "app.tasks.ip_refresh_task.refresh_stale_ip_lookups",
+            "schedule": crontab(hour=4, minute=23),
+        },
+        # A CAPE analysis outlives the worker that started it: its state is in
+        # Postgres, so a worker killed mid-poll leaves a row still owed an
+        # answer. This picks those up, and retires any that blew their polling
+        # deadline while nobody was watching. Idempotent by construction — an
+        # analysis that already has a CAPE task id is polled, never resubmitted.
+        "cape-resume-in-flight": {
+            "task": "app.tasks.cape_task.resume_sandbox_analyses",
+            "schedule": crontab(minute="*/5"),
+        },
+        # The per-alert follow-up is dispatched with a countdown, and a countdown
+        # lives in the broker: a Redis restart or a worker killed mid-flight
+        # drops it with no trace. This sweep reads the same due rows, so the
+        # guarantee is "the window gets read", not "the window usually gets
+        # read". Running both is safe — the read starts from a stored
+        # high-water mark and merges on each document's own id.
+        # Correlation acts here rather than on a page load. Hourly, and the
+        # task itself returns early when no alert has arrived since its last
+        # pass — an hour with no ingest cannot have changed a case, so
+        # re-deriving the same grouping would spend the scan for nothing.
+        "case-correlation-hourly": {
+            "task": "app.tasks.case_correlation_task.correlate_and_notify",
+            "schedule": crontab(minute=5),
+        },
+        # Every minute, because the quiet period is ten and an hourly job
+        # would add up to an hour of dead time to every case's MTTR. A pass
+        # with nothing due is one indexed read.
+        "case-closure-sweep": {
+            "task": "app.tasks.case_closure_task.close_quiet_cases",
+            "schedule": crontab(minute="*"),
+        },
+        # The backstop for investigation token maps. Hourly, because the
+        # ceiling is 24 hours and a pass an hour late costs an hour of a map
+        # that has already outlived its investigation by a day. Every row it
+        # deletes is one an investigation failed to purge, so the task logs a
+        # WARNING rather than a count.
+        "token-map-ceiling-sweep": {
+            "task": "app.tasks.token_map_purge_task.purge_token_maps",
+            "schedule": crontab(minute=23),
+        },
+        "alert-log-context-sweep": {
+            "task": "app.tasks.alert_log_followup_task.sweep_alert_log_context",
+            "schedule": crontab(minute="*"),
+        },
+        "watchlist-scheduled-checks": {
+            "task": "tasks.watchlist_check",
+            "schedule": crontab(minute=0),  # Every hour, on the hour
+        },
+        # A URL VirusTotal has never seen gets submitted for scanning, and the
+        # result lands after the investigation has already concluded. Without
+        # this the pending id was recorded and never chased.
+        "virustotal-collect-pending": {
+            "task": "tasks.vt_collect_pending",
+            "schedule": crontab(minute="*/15"),
+        },
+        # A worker that dies mid-task leaves its run in `processing`. Redis will
+        # redeliver the message eventually, but not before the visibility
+        # timeout, which has to stay above the task's own 30-minute limit. This
+        # closes that gap to minutes instead of up to an hour.
+        # Cached ANY.RUN recordings live 24 hours. Swept hourly rather than
+        # daily so a burst of large files is reclaimed within the hour after it
+        # expires, not at some fixed time of day.
+        "purge-anyrun-videos": {
+            "task": "tasks.purge_anyrun_videos",
+            "schedule": crontab(minute=17),
+        },
+        "recover-stuck-alert-runs": {
+            "task": "tasks.recover_stuck_alert_runs",
+            "schedule": crontab(minute="*/3"),
+        },
+    },
+    timezone="UTC",
 )
 
 # Auto-discover tasks in these modules
@@ -44,4 +191,58 @@ celery_app.autodiscover_tasks([
     "app.tasks.collector_task",
     "app.tasks.investigation_task",
     "app.tasks.analysis_task",
+    "app.tasks.batch_task",
+    "app.tasks.email_investigation_task",
+    "app.tasks.watchlist_task",
+    "app.tasks.alert_recovery_task",
+    "app.tasks.alert_body_task",
+    "app.tasks.alert_callback_task",
+    "app.tasks.vt_pending_task",
+    # Correlated-case work. Both were queued by the API and rejected by the
+    # worker with "Received unregistered task" until they were listed here —
+    # the escalation webhook silently among them, masked only because no
+    # webhook URL was configured to queue anything yet.
+    "app.tasks.case_event_task",
+    "app.tasks.case_narrative_task",
+    "app.tasks.anyrun_video_task",
+    "app.tasks.sandbox_task",
+    # Third time this list has been the bug. The API queued the CAPE workflow
+    # happily and the worker answered "Received unregistered task", so every
+    # submission sat in `queued` for ever.
+    "app.tasks.cape_task",
+    # Fourth time. The log-context follow-up is the task that reads the half of
+    # a live alert's window that had not happened yet; unregistered, every
+    # real-time alert would keep the logs it managed to grab in the first
+    # second and silently never get the rest.
+    "app.tasks.alert_log_followup_task",
+    # Sixth entry worth a note, and this one watches the failure the list
+    # itself keeps causing. An unregistered task and a worker running code
+    # that predates a migration produce the identical symptom — alerts sitting
+    # in `queued` for ever — and on 2026-10-09 the second of those ran 2h38m
+    # with no signal but a person looking at a screen. If this task is ever
+    # dropped from this list, the alarm for that is gone too.
+    "app.tasks.pipeline_watch_task",
+    # Fifth time. Correlation used to act from the read path; this is the job
+    # that acts instead, and unregistered it would simply never run while the
+    # reads that used to do the work no longer do it.
+    "app.tasks.case_correlation_task",
+    # Sixth time this list has been the bug. Cases close themselves now; a
+    # closure job the worker never registered would leave every case open for
+    # ever and MTTR undefined, with nothing in any log to say why.
+    "app.tasks.case_closure_task",
+    # Third time this list has been the bug. The API queued the CAPE workflow
+    # happily and the worker answered "Received unregistered task", so every
+    # submission sat in `queued` for ever.
+    #
+    # Seventh. This one would fail quietly in a way the others did not: beat
+    # would queue the refresh, the worker would reject it as unregistered, and
+    # the symptom is stored IP verdicts that keep getting older — which looks
+    # exactly like a refresh working on addresses nobody happens to view.
+    "app.tasks.ip_refresh_task",
+    # Eighth. This one is the backstop that reports when token maps outlive
+    # their investigations, so unregistered it fails in the most fitting way
+    # available: the maps are never deleted, the identifiers they hold stay
+    # in the database indefinitely, and the warning that would have said so
+    # is the thing that never ran.
+    "app.tasks.token_map_purge_task",
 ])

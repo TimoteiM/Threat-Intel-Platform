@@ -1,0 +1,745 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Incident Analysis Assistant</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        
+        // Simple icon components
+        const Shield = () => React.createElement('div', { 
+            className: 'w-8 h-8 bg-blue-400 rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '🛡️');
+        
+        const AlertTriangle = () => React.createElement('div', { 
+            className: 'w-4 h-4 bg-yellow-400 rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '⚠️');
+        
+        const FileText = () => React.createElement('div', { 
+            className: 'w-5 h-5 bg-green-400 rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '📄');
+        
+        const Brain = () => React.createElement('div', { 
+            className: 'w-4 h-4 bg-purple-400 rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '🧠');
+        
+        const Plus = () => React.createElement('div', { 
+            className: 'w-4 h-4 bg-white rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '+');
+        
+        const Trash2 = () => React.createElement('div', { 
+            className: 'w-4 h-4 bg-red-400 rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '🗑️');
+        
+        const Download = () => React.createElement('div', { 
+            className: 'w-4 h-4 bg-green-600 rounded flex items-center justify-center text-white font-bold text-xs' 
+        }, '↓');
+        
+        const Clock = () => React.createElement('div', { 
+            className: 'w-4 h-4 bg-gray-400 rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '🕐');
+        
+        const Target = () => React.createElement('div', { 
+            className: 'w-4 h-4 bg-blue-600 rounded flex items-center justify-center text-white font-bold text-xs' 
+        }, '🎯');
+        
+        const Search = () => React.createElement('div', { 
+            className: 'w-5 h-5 bg-blue-400 rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '🔍');
+        
+        const Key = () => React.createElement('div', { 
+            className: 'w-4 h-4 bg-yellow-400 rounded flex items-center justify-center text-black font-bold text-xs' 
+        }, '🔑');
+
+        const SecurityAnalysisAssistant = () => {
+            const [activeTab, setActiveTab] = useState('setup');
+            const [apiKey, setApiKey] = useState('');
+            const [alertMessage, setAlertMessage] = useState('');
+            const [sanitizedAlertMessage, setSanitizedAlertMessage] = useState('');
+            const [alertAnalysis, setAlertAnalysis] = useState('');
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+            const [sensitiveDataFound, setSensitiveDataFound] = useState([]);
+            const [autoSanitize, setAutoSanitize] = useState(true);
+            const [sensitiveDataMap, setSensitiveDataMap] = useState(new Map());
+            const [serverStatus, setServerStatus] = useState('checking');
+            
+            // Complex incident state
+            const [incidentLogs, setIncidentLogs] = useState([]);
+            const [incidentAnalysis, setIncidentAnalysis] = useState('');
+            const [isCorrelating, setIsCorrelating] = useState(false);
+            const [incidentTitle, setIncidentTitle] = useState('');
+
+            // Check server status on component mount
+            useEffect(() => {
+                checkServerStatus();
+                // Load API key from localStorage
+                try {
+                    const savedApiKey = localStorage.getItem('anthropic-api-key');
+                    if (savedApiKey) {
+                        setApiKey(savedApiKey);
+                    }
+                } catch (error) {
+                    console.warn('Could not access localStorage:', error);
+                }
+            }, []);
+
+            const checkServerStatus = async () => {
+                try {
+                    const response = await fetch('/health');
+                    if (response.ok) {
+                        setServerStatus('connected');
+                    } else {
+                        setServerStatus('error');
+                    }
+                } catch (error) {
+                    setServerStatus('offline');
+                }
+            };
+
+            const sanitizeData = (text) => {
+                const fieldPatterns = [
+                    { 
+                        pattern: /(Security ID:\s*)(S-1-[0-9-]+)(?=\s|$|\r|\n)/gi, 
+                        type: 'Security ID', 
+                        tokenPrefix: 'SID_' 
+                    },
+                    { 
+                        pattern: /(Account Name:\s*)([^\r\n\t\\]+?)(?=\s*(?:\r|\n|\t|\\|$))/gi, 
+                        type: 'Account Name', 
+                        tokenPrefix: 'USER_' 
+                    },
+                    { 
+                        pattern: /(Account Domain:\s*)([^\r\n\t\\]+?)(?=\s*(?:\r|\n|\t|\\|$))/gi, 
+                        type: 'Domain', 
+                        tokenPrefix: 'DOMAIN_' 
+                    },
+                    { 
+                        pattern: /(Logon ID:\s*)(0x[0-9A-Fa-f]+)/gi, 
+                        type: 'Logon ID', 
+                        tokenPrefix: 'LOGON_' 
+                    },
+                    { 
+                        pattern: /((?:Caller )?Process ID:\s*)([0-9]+)/gi, 
+                        type: 'Process ID', 
+                        tokenPrefix: 'PID_' 
+                    },
+                    { 
+                        pattern: /(Workstation Name:\s*)([^\r\n\t\\]+?)(?=\s*(?:\r|\n|\t|\\|$))/gi, 
+                        type: 'Workstation', 
+                        tokenPrefix: 'WORKSTATION_' 
+                    },
+                    { 
+                        pattern: /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/g, 
+                        type: 'IP Address', 
+                        tokenPrefix: 'IP_' 
+                    },
+                    { 
+                        pattern: /(Source Port:\s*)([0-9]+)/gi, 
+                        type: 'Port', 
+                        tokenPrefix: 'PORT_' 
+                    }
+                ];
+
+                let sanitizedText = text;
+                const foundSensitive = [];
+                const tokenMap = new Map();
+                let tokenCounter = 1;
+
+                fieldPatterns.forEach(({ pattern, type, tokenPrefix }) => {
+                    try {
+                        const matches = [...text.matchAll(pattern)];
+                        
+                        matches.forEach(match => {
+                            if (match.length >= 3) {
+                                const fullMatch = match[0];
+                                const label = match[1];
+                                const value = match[2].trim();
+                                const token = `${tokenPrefix}${tokenCounter++}`;
+                                
+                                if (value && value !== '-' && value.length > 0 && value.length < 100) {
+                                    tokenMap.set(token, value);
+                                    foundSensitive.push({
+                                        type: type,
+                                        original: value,
+                                        replacement: token
+                                    });
+                                    
+                                    const replacement = label + token;
+                                    sanitizedText = sanitizedText.replace(fullMatch, replacement);
+                                }
+                            } else {
+                                const value = match[0].trim();
+                                const token = `${tokenPrefix}${tokenCounter++}`;
+                                
+                                if (value && value.length > 0 && value.length < 50) {
+                                    tokenMap.set(token, value);
+                                    foundSensitive.push({
+                                        type: type,
+                                        original: value,
+                                        replacement: token
+                                    });
+                                    
+                                    sanitizedText = sanitizedText.replace(value, token);
+                                }
+                            }
+                        });
+                    } catch (error) {
+                        console.error(`Error processing pattern for ${type}:`, error);
+                    }
+                });
+
+                setSensitiveDataMap(tokenMap);
+                return { sanitizedText, foundSensitive };
+            };
+
+            const saveApiKey = () => {
+                try {
+                    localStorage.setItem('anthropic-api-key', apiKey);
+                    alert('API Key saved successfully!');
+                } catch (error) {
+                    console.warn('Could not save to localStorage:', error);
+                    alert('API Key saved for this session only (localStorage not available)');
+                }
+            };
+
+            const analyzeAlert = async () => {
+                if ((!sanitizedAlertMessage.trim() && !alertMessage.trim()) || !apiKey) return;
+                if (serverStatus !== 'connected') {
+                    alert('Backend server is not running. Please start the server first.');
+                    return;
+                }
+                
+                const messageToAnalyze = autoSanitize ? sanitizedAlertMessage : alertMessage;
+                setIsAnalyzing(true);
+                
+                try {
+                    const analysisPrompt = `Analyze this Windows security event log and provide a concise summary. Sensitive data has been replaced with tokens (SID_1, USER_1, DOMAIN_1, etc.):
+
+${messageToAnalyze}
+
+Provide a clear paragraph explaining what security event occurred. Keep the tokens in your response.`;
+
+                    const response = await fetch('/api/analyze', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            apiKey: apiKey,
+                            message: analysisPrompt,
+                            maxTokens: 1500
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error || `HTTP ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    let analysis = data.content[0].text;
+                    
+                    // Restore original values
+                    if (autoSanitize && sensitiveDataMap.size > 0) {
+                        sensitiveDataMap.forEach((originalValue, token) => {
+                            if (analysis.includes(token)) {
+                                analysis = analysis.replaceAll(token, originalValue);
+                            }
+                        });
+                    }
+                    
+                    setAlertAnalysis(analysis);
+                    
+                } catch (error) {
+                    console.error("Analysis error:", error);
+                    setAlertAnalysis(`Error analyzing alert: ${error.message}\n\nPlease check your API key and try again.`);
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            };
+
+            const handleAlertMessageChange = (value) => {
+                setAlertMessage(value);
+                if (autoSanitize && value.trim()) {
+                    try {
+                        const { sanitizedText, foundSensitive } = sanitizeData(value);
+                        setSanitizedAlertMessage(sanitizedText);
+                        setSensitiveDataFound(foundSensitive);
+                    } catch (error) {
+                        console.error("Sanitization error:", error);
+                        setSanitizedAlertMessage(value);
+                        setSensitiveDataFound([]);
+                    }
+                } else {
+                    setSanitizedAlertMessage(value);
+                    setSensitiveDataFound([]);
+                }
+            };
+
+            const addIncidentLog = () => {
+                setIncidentLogs([...incidentLogs, { id: Date.now(), content: '', timestamp: new Date().toLocaleString() }]);
+            };
+
+            const updateIncidentLog = (id, content) => {
+                setIncidentLogs(incidentLogs.map(log => 
+                    log.id === id ? { ...log, content } : log
+                ));
+            };
+
+            const removeIncidentLog = (id) => {
+                setIncidentLogs(incidentLogs.filter(log => log.id !== id));
+            };
+
+            const correlateIncident = async () => {
+                if (incidentLogs.length === 0 || !incidentLogs.some(log => log.content.trim()) || !apiKey) return;
+                if (serverStatus !== 'connected') {
+                    alert('Backend server is not running. Please start the server first.');
+                    return;
+                }
+                
+                setIsCorrelating(true);
+                
+                try {
+                    const logsContent = incidentLogs
+                        .filter(log => log.content.trim())
+                        .map((log, index) => `Log Entry ${index + 1}:\n${log.content}`)
+                        .join('\n\n---\n\n');
+
+                    const correlationPrompt = `As a senior cybersecurity analyst, correlate and analyze the following log entries from a security incident. 
+
+IMPORTANT: Extract the actual timestamps from WITHIN the log data itself (like "timestamp", "UtcTime", event times, etc.). Do NOT use the "Log Entry X" labels - these are just organizational markers. Focus on the real timestamps embedded in the log content.
+
+Provide a comprehensive incident analysis with:
+
+1. **Executive Summary**: High-level overview of the incident
+2. **Timeline Reconstruction**: Use ONLY the actual timestamps found in the log data, not the log entry numbers
+3. **Attack Chain Analysis**: How the attack progressed through systems
+4. **Indicators of Compromise (IoCs)**: Key artifacts and signatures
+5. **Impact Assessment**: Systems affected and potential data exposure
+6. **Root Cause Analysis**: How the incident originated and why it succeeded
+7. **Remediation Recommendations**: Immediate and long-term security measures
+
+Incident Title: ${incidentTitle || 'Complex Security Incident'}
+
+Log Entries:
+${logsContent}
+
+CRITICAL: For timeline reconstruction, parse the actual timestamps from the log content (such as "timestamp":"2025-08-05T04:06:43.839913+0000", "UtcTime", etc.). Ignore any "Log Entry X" timestamps.
+
+Provide a detailed, professional incident report suitable for executive briefing and technical documentation.`;
+
+                    const response = await fetch('/api/analyze', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            apiKey: apiKey,
+                            message: correlationPrompt,
+                            maxTokens: 2000
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error || `HTTP ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    setIncidentAnalysis(data.content[0].text);
+                } catch (error) {
+                    setIncidentAnalysis(`Error correlating incident data: ${error.message}\n\nPlease check your API key and try again.`);
+                } finally {
+                    setIsCorrelating(false);
+                }
+            };
+
+            const exportReport = (content, filename) => {
+                const blob = new Blob([content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-900 text-white p-6">
+                    <div className="max-w-6xl mx-auto">
+                        {/* Header with Server Status */}
+                        <div className="flex items-center justify-between mb-8">
+                            <div className="flex items-center gap-3">
+                                <Shield className="w-8 h-8 text-blue-400" />
+                                <h1 className="text-3xl font-bold">Security Incident Analysis Assistant</h1>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <div className={`w-3 h-3 rounded-full ${
+                                    serverStatus === 'connected' ? 'bg-green-500' :
+                                    serverStatus === 'offline' ? 'bg-red-500' :
+                                    serverStatus === 'error' ? 'bg-yellow-500' : 'bg-gray-500'
+                                }`}></div>
+                                <span className="text-sm text-gray-300">
+                                    Server: {serverStatus === 'connected' ? 'Connected' : 
+                                           serverStatus === 'offline' ? 'Offline' :
+                                           serverStatus === 'error' ? 'Error' : 'Checking...'}
+                                </span>
+                                <button 
+                                    onClick={checkServerStatus}
+                                    className="ml-2 text-xs text-blue-400 hover:text-blue-300"
+                                >
+                                    Refresh
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Server Status Warning */}
+                        {serverStatus !== 'connected' && (
+                            <div className="bg-red-900/50 border border-red-500/50 rounded-lg p-4 mb-6">
+                                <h3 className="font-semibold text-red-300 mb-2">Backend Server Required</h3>
+                                <p className="text-sm text-red-200 mb-2">
+                                    The analysis features require a backend server to handle API calls. 
+                                </p>
+                                <p className="text-xs text-red-200">
+                                    Run: <code className="bg-red-800/30 px-1 rounded">npm install express cors</code> then <code className="bg-red-800/30 px-1 rounded">node server.js</code>
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Tab Navigation */}
+                        <div className="flex mb-6 bg-gray-800 rounded-lg p-1">
+                            <button
+                                onClick={() => setActiveTab('setup')}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                                    activeTab === 'setup' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:text-white'
+                                }`}
+                            >
+                                <Key className="w-4 h-4" />
+                                API Setup
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('alert')}
+                                disabled={!apiKey || serverStatus !== 'connected'}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                                    activeTab === 'alert' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:text-white'
+                                } ${(!apiKey || serverStatus !== 'connected') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                                <AlertTriangle className="w-4 h-4" />
+                                Alert Analysis
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('incident')}
+                                disabled={!apiKey || serverStatus !== 'connected'}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                                    activeTab === 'incident' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:text-white'
+                                } ${(!apiKey || serverStatus !== 'connected') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                                <Brain className="w-4 h-4" />
+                                Complex Incident Correlation
+                            </button>
+                        </div>
+
+                        {/* API Setup Tab */}
+                        {activeTab === 'setup' && (
+                            <div className="bg-gray-800 rounded-lg p-6">
+                                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                                    <Key className="w-5 h-5 text-yellow-400" />
+                                    Setup Instructions
+                                </h2>
+                                
+                                <div className="space-y-6">
+                                    {/* Backend Setup */}
+                                    <div className="bg-purple-900/50 border border-purple-500/50 rounded-lg p-4">
+                                        <h3 className="font-semibold text-purple-300 mb-2">Step 1: Setup Backend Server</h3>
+                                        <ol className="list-decimal list-inside space-y-1 text-sm text-purple-200">
+                                            <li>Save the provided server.js file to your project folder</li>
+                                            <li>Install dependencies: <code className="bg-purple-800/30 px-1 rounded">npm install express cors</code></li>
+                                            <li>Start the server: <code className="bg-purple-800/30 px-1 rounded">node server.js</code></li>
+                                            <li>Server should run on <code className="bg-purple-800/30 px-1 rounded">http://localhost:3000</code></li>
+                                        </ol>
+                                    </div>
+
+                                    {/* API Key Setup */}
+                                    <div className="bg-blue-900/50 border border-blue-500/50 rounded-lg p-4">
+                                        <h3 className="font-semibold text-blue-300 mb-2">Step 2: Get Your Anthropic API Key</h3>
+                                        <ol className="list-decimal list-inside space-y-1 text-sm text-blue-200">
+                                            <li>Visit <a href="https://console.anthropic.com" className="underline hover:text-blue-100" target="_blank">console.anthropic.com</a></li>
+                                            <li>Sign up or log in to your account</li>
+                                            <li>Navigate to "API Keys" section</li>
+                                            <li>Click "Create Key" and give it a name</li>
+                                            <li>Copy the generated key and paste it below</li>
+                                        </ol>
+                                    </div>
+                                    
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                                            Anthropic API Key
+                                        </label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="password"
+                                                value={apiKey}
+                                                onChange={(e) => setApiKey(e.target.value)}
+                                                placeholder="sk-ant-api03-..."
+                                                className="flex-1 bg-gray-700 border border-gray-600 rounded-lg p-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            />
+                                            <button
+                                                onClick={saveApiKey}
+                                                disabled={!apiKey.trim()}
+                                                className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 px-6 py-2 rounded-lg font-medium transition-colors"
+                                            >
+                                                Save Key
+                                            </button>
+                                        </div>
+                                    </div>
+                                    
+                                    {apiKey && serverStatus === 'connected' && (
+                                        <div className="bg-green-900/50 border border-green-500/50 rounded-lg p-4">
+                                            <p className="text-green-300 text-sm">
+                                                ✅ Ready! Both API key and server are configured. You can now use the analysis features.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Alert Analysis Tab */}
+                        {activeTab === 'alert' && (
+                            <div className="space-y-6">
+                                <div className="bg-gray-800 rounded-lg p-6">
+                                    <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                                        <Search className="w-5 h-5 text-blue-400" />
+                                        SIEM Alert Analysis
+                                    </h2>
+                                    
+                                    <div className="space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <label className="block text-sm font-medium text-gray-300">
+                                                Alert Message
+                                            </label>
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="checkbox"
+                                                    id="autoSanitize"
+                                                    checked={autoSanitize}
+                                                    onChange={(e) => setAutoSanitize(e.target.checked)}
+                                                    className="rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500"
+                                                />
+                                                <label htmlFor="autoSanitize" className="text-sm text-gray-300">
+                                                    Auto-sanitize sensitive data
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <textarea
+                                            value={alertMessage}
+                                            onChange={(e) => handleAlertMessageChange(e.target.value)}
+                                            placeholder="Paste your SIEM alert message here..."
+                                            className="w-full h-32 bg-gray-700 border border-gray-600 rounded-lg p-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                        />
+                                        
+                                        {/* Sensitive Data Detection Alert */}
+                                        {autoSanitize && sensitiveDataFound.length > 0 && (
+                                            <div className="bg-yellow-900/50 border border-yellow-500/50 rounded-lg p-4">
+                                                <h4 className="font-semibold text-yellow-300 mb-2 flex items-center gap-2">
+                                                    🛡️ Sensitive Data Detected & Sanitized
+                                                </h4>
+                                                <div className="text-sm text-yellow-200 space-y-1">
+                                                    {sensitiveDataFound.map((item, index) => (
+                                                        <div key={index} className="flex justify-between items-center">
+                                                            <span className="font-mono text-xs bg-yellow-800/30 px-2 py-1 rounded">
+                                                                {item.type}
+                                                            </span>
+                                                            <span className="text-yellow-300">
+                                                                {item.original} → {item.replacement}
+                                                            </span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <p className="text-xs text-yellow-200 mt-2">
+                                                    ✅ Sanitized version will be sent to API for analysis
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        {/* Sanitized Preview */}
+                                        {autoSanitize && alertMessage && (
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-300 mb-2">
+                                                    Sanitized Version (Preview)
+                                                </label>
+                                                <div className="bg-gray-800 border border-gray-600 rounded-lg p-3 text-gray-300 text-sm max-h-32 overflow-y-auto">
+                                                    {sanitizedAlertMessage || "No sanitization needed"}
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        <button
+                                            onClick={analyzeAlert}
+                                            disabled={isAnalyzing || (!alertMessage.trim()) || !apiKey || serverStatus !== 'connected'}
+                                            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-6 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                                        >
+                                            {isAnalyzing ? (
+                                                <>
+                                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                    Analyzing...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Target className="w-4 h-4" />
+                                                    Analyze Alert
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Alert Analysis Results */}
+                                {alertAnalysis && (
+                                    <div className="bg-gray-800 rounded-lg p-6">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h3 className="text-lg font-semibold flex items-center gap-2">
+                                                <FileText className="w-5 h-5 text-green-400" />
+                                                Analysis Results
+                                            </h3>
+                                            <button
+                                                onClick={() => exportReport(alertAnalysis, `alert-analysis-${Date.now()}.txt`)}
+                                                className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                                            >
+                                                <Download className="w-4 h-4" />
+                                                Export Report
+                                            </button>
+                                        </div>
+                                        <div className="bg-gray-900 rounded-lg p-4 whitespace-pre-wrap text-gray-100 max-h-96 overflow-y-auto">
+                                            {alertAnalysis}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Complex Incident Correlation Tab */}
+                        {activeTab === 'incident' && (
+                            <div className="space-y-6">
+                                <div className="bg-gray-800 rounded-lg p-6">
+                                    <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                                        <Brain className="w-5 h-5 text-purple-400" />
+                                        Complex Incident Correlation
+                                    </h2>
+                                    
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-300 mb-2">
+                                                Incident Title (Optional)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={incidentTitle}
+                                                onChange={(e) => setIncidentTitle(e.target.value)}
+                                                placeholder="e.g., Suspicious PowerShell Activity - User Account Compromise"
+                                                className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center justify-between">
+                                            <h3 className="text-lg font-medium">Log Entries</h3>
+                                            <button
+                                                onClick={addIncidentLog}
+                                                className="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                                            >
+                                                <Plus className="w-4 h-4" />
+                                                Add Log Entry
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-4 max-h-80 overflow-y-auto">
+                                            {incidentLogs.map((log, index) => (
+                                                <div key={log.id} className="bg-gray-700 rounded-lg p-4">
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <div className="flex items-center gap-2 text-sm text-gray-300">
+                                                            <Clock className="w-4 h-4" />
+                                                            Log Entry {index + 1} - {log.timestamp}
+                                                        </div>
+                                                        <button
+                                                            onClick={() => removeIncidentLog(log.id)}
+                                                            className="text-red-400 hover:text-red-300 transition-colors"
+                                                        >
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                    <textarea
+                                                        value={log.content}
+                                                        onChange={(e) => updateIncidentLog(log.id, e.target.value)}
+                                                        placeholder="Paste log data, alert details, or relevant information..."
+                                                        className="w-full h-40 bg-gray-600 border border-gray-500 rounded-lg p-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-vertical"
+                                                   />
+                                               </div>
+                                           ))}
+                                       </div>
+
+                                       <button
+                                           onClick={correlateIncident}
+                                           disabled={isCorrelating || incidentLogs.length === 0 || !incidentLogs.some(log => log.content.trim()) || !apiKey || serverStatus !== 'connected'}
+                                           className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 px-6 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                                       >
+                                           {isCorrelating ? (
+                                               <>
+                                                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                   Correlating...
+                                               </>
+                                           ) : (
+                                               <>
+                                                   <Brain className="w-4 h-4" />
+                                                   Correlate Incident
+                                               </>
+                                           )}
+                                       </button>
+                                   </div>
+                               </div>
+
+                               {/* Incident Correlation Results */}
+                               {incidentAnalysis && (
+                                   <div className="bg-gray-800 rounded-lg p-6">
+                                       <div className="flex items-center justify-between mb-4">
+                                           <h3 className="text-lg font-semibold flex items-center gap-2">
+                                               <FileText className="w-5 h-5 text-green-400" />
+                                               Incident Analysis Report
+                                           </h3>
+                                           <button
+                                               onClick={() => exportReport(incidentAnalysis, `incident-report-${Date.now()}.txt`)}
+                                               className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                                           >
+                                               <Download className="w-4 h-4" />
+                                               Export Report
+                                           </button>
+                                       </div>
+                                       <div className="bg-gray-900 rounded-lg p-4 whitespace-pre-wrap text-gray-100 max-h-96 overflow-y-auto">
+                                           {incidentAnalysis}
+                                       </div>
+                                   </div>
+                               )}
+                           </div>
+                       )}
+                   </div>
+               </div>
+           );
+       };
+
+       ReactDOM.render(<SecurityAnalysisAssistant />, document.getElementById('root'));
+   </script>
+</body>
+</html>

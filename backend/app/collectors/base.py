@@ -26,6 +26,7 @@ from typing import Any
 
 from app.models.enums import CollectorStatus
 from app.models.schemas import CollectorMeta
+from app.services.proxy_profiles import selected_proxy_profile, selected_proxy_summary
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +36,84 @@ COLLECTOR_VERSION = "1.0.0"
 class BaseCollector(abc.ABC):
 
     name: str = "base"
+    # Observable types this collector can handle (subclasses override)
+    supported_types: frozenset[str] = frozenset({"domain"})
 
-    def __init__(self, domain: str, investigation_id: str, timeout: int = 30):
-        self.domain = domain
+    # ── Per-tenant integration declaration ───────────────────────────────
+    #
+    # A collector that needs a credential *per tenant* — an EDR, an email
+    # security product, anything covering one customer's estate rather than
+    # the open internet — says so here. The integrations catalogue is then
+    # **derived** from whatever declares itself, so adding a connector adds a
+    # tool to the page with no list to update.
+    #
+    # This is deliberately a property a connector opts into rather than a
+    # registry of tool names. A list of tools would be the ninth
+    # hand-maintained list in this codebase, and the eight before it each
+    # swallowed a feature silently — a connector absent from such a list
+    # would be unconfigurable with nothing to say so.
+    #
+    # Platform-wide providers (VirusTotal, urlscan, abuse.ch) leave this
+    # False: one key serves every tenant and it lives in `.env`.
+    integration: bool = False
+
+    #: Which health directions this integration has. An integration that
+    #: answers queries and has stopped delivering detections is healthy by
+    #: one measure and dead by the other, so the two are tracked separately
+    #: and a connector states which it actually does.
+    #:   "enrichment" — queried during an investigation
+    #:   "ingest"     — delivers alerts or detections into the pipeline
+    integration_directions: tuple[str, ...] = ()
+
+    #: Human label for the integrations page. The class name and the evidence
+    #: key are both wrong to show an operator.
+    integration_label: str = ""
+
+    #: Non-secret config fields this integration needs, as
+    #: {field: human description}. Rendered as inputs; stored in
+    #: `tenant_integrations.config`.
+    integration_config_fields: dict[str, str] = {}
+
+    #: Secret fields, as {field: human description}. Write-only everywhere:
+    #: settable through the API, never returned, never logged. Sealed by
+    #: `app/security/secret_box.py` before storage.
+    integration_secret_fields: dict[str, str] = {}
+
+    #: Which kind of tool this is, for grouping on the integrations page:
+    #: `edr`, `firewall`, `email`, `siem`, `sandbox`, `intel`. Declared here
+    #: rather than listed in the UI so the grouping is derived from the
+    #: connectors — the page renders whatever categories it is given and
+    #: falls back to the raw key as a heading, so a new category cannot be
+    #: swallowed the way a hand-kept list would swallow it.
+    #:
+    #: `other` is the honest default: an uncategorised tool appears under
+    #: "Other" rather than silently joining a group it does not belong to.
+    integration_category: str = "other"
+
+    def __init__(
+        self,
+        domain: str,
+        investigation_id: str,
+        observable_type: str = "domain",
+        timeout: int = 30,
+        file_artifact_id: str | None = None,
+        external_context: dict[str, Any] | None = None,
+    ):
+        self.domain = domain                    # Observable value (backwards-compat name)
+        self.observable_type = observable_type  # domain | ip | url | hash | file
         self.investigation_id = investigation_id
         self.timeout = timeout
+        self.file_artifact_id = file_artifact_id
+        self.external_context = external_context or {}
         self._artifacts: dict[str, bytes] = {}
+
+    @property
+    def proxy_profile(self):
+        return selected_proxy_profile(self.external_context)
+
+    @property
+    def proxy_summary(self) -> dict[str, str] | None:
+        return selected_proxy_summary(self.external_context)
 
     @abc.abstractmethod
     def _collect(self) -> Any:
@@ -98,6 +171,20 @@ class BaseCollector(abc.ABC):
 
             empty = self._empty_evidence(meta)
             return empty, meta, {}
+
+    @property
+    def target_domain(self) -> str:
+        """Return the hostname for domain-based lookups.
+
+        For URL type, extracts the hostname from the URL so collectors like
+        DNS, WHOIS, and Intel can operate on the domain rather than the full URL.
+        For all other types returns self.domain as-is.
+        """
+        if self.observable_type == "url":
+            from urllib.parse import urlparse
+            parsed = urlparse(self.domain)
+            return parsed.hostname or self.domain
+        return self.domain
 
     def _store_artifact(self, name: str, data: bytes | str) -> None:
         """

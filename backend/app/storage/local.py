@@ -42,11 +42,14 @@ class LocalStorage(BaseStorage):
         return str(path)
 
     async def load(self, storage_path: str) -> bytes:
-        async with aiofiles.open(storage_path, "rb") as f:
+        # Normalize backslashes from Windows-saved paths
+        normalized = storage_path.replace("\\", "/")
+        async with aiofiles.open(normalized, "rb") as f:
             return await f.read()
 
     async def exists(self, storage_path: str) -> bool:
-        return os.path.exists(storage_path)
+        normalized = storage_path.replace("\\", "/")
+        return os.path.exists(normalized)
 
     async def delete(self, storage_path: str) -> None:
         if os.path.exists(storage_path):

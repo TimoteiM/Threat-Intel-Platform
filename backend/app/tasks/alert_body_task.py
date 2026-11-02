@@ -1,0 +1,326 @@
+"""Celery task that investigates every indicator found in a pasted alert body."""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.db.session import sync_engine
+from app.models.database import AlertBodyInvestigationRun
+from app.services.alert_body_investigation_service import run_alert_body_investigation
+from app.tasks.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
+
+TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+
+def _load_run(run_uuid: uuid.UUID) -> AlertBodyInvestigationRun | None:
+    with Session(sync_engine) as db:
+        run = db.get(AlertBodyInvestigationRun, run_uuid)
+        if run:
+            db.expunge(run)
+        return run
+
+
+def _is_cancelled(run_uuid: uuid.UUID) -> bool:
+    with Session(sync_engine) as db:
+        run = db.get(AlertBodyInvestigationRun, run_uuid)
+        return bool(run and str(run.status or "").lower() == "cancelled")
+
+
+def _update_run(run_uuid: uuid.UUID, **fields: Any) -> bool:
+    with Session(sync_engine) as db:
+        run = db.get(AlertBodyInvestigationRun, run_uuid)
+        if not run:
+            return False
+        if str(run.status or "").lower() == "cancelled":
+            return False
+        for key, value in fields.items():
+            setattr(run, key, value)
+        db.commit()
+        return True
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.run_alert_body_investigation",
+    time_limit=1800,
+    soft_time_limit=1740,
+)
+def run_alert_body_investigation_task(
+    self,
+    run_id: str,
+    *,
+    requested_collectors: list[str] | None = None,
+    max_indicators: int = 30,
+    run_ip_lookup: bool = True,
+    run_ai: bool = True,
+    include_raw_evidence: bool = False,
+    reuse_prior_investigations: bool | None = None,
+    spawn_investigations: bool | None = None,
+) -> str:
+    try:
+        parsed_id = uuid.UUID(run_id)
+    except ValueError:
+        logger.error("Invalid alert-body run_id: %s", run_id)
+        return run_id
+
+    run = _load_run(parsed_id)
+    if not run:
+        logger.error("Alert-body investigation run not found: %s", run_id)
+        return run_id
+    if str(run.status or "").lower() in TERMINAL_STATUSES:
+        logger.info("Alert-body run %s already %s — skipping", run_id, run.status)
+        return run_id
+
+    alert_body = run.alert_body
+    context = run.context
+    title = run.title
+    _update_run(parsed_id, status="processing")
+
+    try:
+        # Before the analyst, not after. Retrieving the window afterwards is
+        # what left every verdict written without the logs beside it — the same
+        # ordering mistake the CAPE sandbox made, and with the same symptom: a
+        # populated panel next to a conclusion that never read it.
+        log_context, log_row_id = _collect_log_context(parsed_id, run)
+
+        payload = run_alert_body_investigation(
+            alert_body=alert_body,
+            log_context=log_context,
+            run_id=run_id,
+            title=title,
+            context=context,
+            requested_collectors=requested_collectors,
+            max_indicators=max_indicators,
+            run_ip_lookup=run_ip_lookup,
+            run_ai=run_ai,
+            include_raw_evidence=include_raw_evidence,
+            reuse_prior_investigations=reuse_prior_investigations,
+            spawn_investigations=spawn_investigations,
+            is_cancelled=lambda: _is_cancelled(parsed_id),
+            # Written at ingest; this is what a suppression is matched on.
+            alert_fields=(run.result_json or {}).get("alert_fields"),
+            # The customer. Per-tenant integrations resolve their credential
+            # from this, so before it was threaded through, a verified Falcon
+            # contributed to no verdict at all.
+            tenant_id=run.tenant_id,
+        )
+        summary = payload.get("summary") or {}
+        # The sender's own reference travels with the run, so their callback and
+        # their ticket line up.
+        payload["external_ref"] = (run.result_json or {}).get("external_ref")
+        # The pipeline builds a fresh payload, so anything recorded at ingest is
+        # otherwise lost the moment the run finishes. These say how much of a
+        # large log was actually scanned — exactly the facts a reader needs when
+        # the body runs to megabytes, and exactly the ones that vanished.
+        for carried in (
+            "alert_body_chars",
+            "analysed_body_chars",
+            "alert_body_truncated_for_analysis",
+            # These went the same way the size facts did: written at ingest and
+            # gone the moment the run finished. alert_fields is what a
+            # suppression is built from and what names the sending platform, so
+            # losing it left the Suppress button re-parsing the body and the
+            # source invisible on every completed run.
+            "alert_fields",
+            "entity",
+            "alert_source",
+            "alert_client",
+            "alert_kind",
+            "event_time",
+            "suppressed_by_exclusion",
+            # A re-analysis rewrites the payload wholesale, so anything the
+            # request itself recorded has to be carried or it is lost by the
+            # run it asked for. `previous_analyses` is the kept verdict the
+            # endpoint promised not to overwrite; losing it here would make
+            # that promise false in exactly the case it was made for.
+            "previous_analyses",
+            "reanalysis",
+        ):
+            if carried in (run.result_json or {}):
+                payload[carried] = (run.result_json or {})[carried]
+        # The stored summary, now that the analysis has run over it. Marking it
+        # analysed here — after the verdict exists — is what makes
+        # `new_logs_since_analysis` mean something later.
+        payload["log_context"] = _finalise_log_context(parsed_id, log_row_id, payload)
+
+        _update_run(
+            parsed_id,
+            status="completed",
+            indicator_count=int(summary.get("indicators_total") or 0),
+            # **No default.** `or "inconclusive"` turned "the summary recorded
+            # no verdict" into a published verdict — the same shape as a
+            # Pydantic `= []` making "found nothing" and "nobody looked" the
+            # same bytes. `inconclusive` is a claim about the evidence; an
+            # absent verdict is a claim about us, and the column is nullable
+            # so it can say that.
+            #
+            # Measured before removing it: the default had **never fired** —
+            # 0 rows carry a row-level verdict where `result_json` recorded
+            # none, across 17,640 runs. So this changes no existing row and no
+            # existing report. It disarms a trap rather than fixing damage,
+            # which is why it is safe to do without a before/after.
+            overall_verdict=(
+                str(summary["overall_verdict"])
+                if summary.get("overall_verdict") else None
+            ),
+            indicator_risk_score=int(summary.get("highest_risk_score") or 0),
+            result_json=payload,
+            completed_at=datetime.now(timezone.utc),
+        )
+
+        _record_alert_investigation(parsed_id, payload, run)
+    except Exception as exc:
+        logger.exception("Alert-body investigation failed: %s", run_id)
+        _update_run(
+            parsed_id,
+            status="failed",
+            result_json={
+                "error": f"{type(exc).__name__}: {exc}",
+                "external_ref": (run.result_json or {}).get("external_ref"),
+            },
+            completed_at=datetime.now(timezone.utc),
+        )
+
+    _dispatch_callback(parsed_id)
+    return run_id
+
+
+def _dispatch_callback(run_uuid: uuid.UUID) -> None:
+    """Hand a finished run to the callback deliverer, when the sender asked for one."""
+    try:
+        with Session(sync_engine) as db:
+            run = db.get(AlertBodyInvestigationRun, run_uuid)
+            if not run or not str(run.callback_url or "").strip():
+                return
+        # Imported here so the alert pipeline does not depend on the HTTP client
+        # when nobody registered a callback.
+        from app.tasks.alert_callback_task import deliver_alert_callback
+
+        deliver_alert_callback.delay(str(run_uuid))
+    except Exception as exc:
+        logger.warning("Could not queue callback for alert run %s: %s", run_uuid, exc)
+
+
+def _collect_log_context(run_uuid: uuid.UUID, run: Any) -> tuple[dict[str, Any] | None, Any]:
+    """Retrieve the window and persist it, before anything analyses the alert.
+
+    Returns (context for the analyst, stored row id). Both are None-safe: this
+    is enrichment, and a log store that is down, unconfigured for this tenant,
+    or still filling must leave the alert analysed and the verdict written.
+    """
+    from app.services import alert_log_context_store as store
+    from app.services.alert_log_context_service import collect_for_alert
+    from app.tasks.alert_log_followup_task import schedule_followup
+
+    try:
+        context = collect_for_alert(
+            tenant_id=run.tenant_id,
+            event_time=run.event_time,
+            entity_host=run.entity_host,
+            entity_user=run.entity_user,
+            alert_body=run.alert_body,
+            alert_fields=(run.result_json or {}).get("alert_fields") or {},
+        )
+        row_id = None
+        merged_logs = None
+        with Session(sync_engine) as db:
+            row = store.save(db, run_uuid, context)
+            if row is not None:
+                row_id = row.id
+                # The merged set, which is what the analyst is looking at. The
+                # fresh retrieval alone is not: a window read twice does not
+                # return exactly the same documents, and an event an analyst
+                # picked from the view but which is absent from this read would
+                # be dropped without a word. Measured — five of six picks
+                # survived until this line existed.
+                merged_logs = list(row.logs or [])
+                if row.status in ("partial", "unavailable"):
+                    schedule_followup(row)
+
+        payload = context.as_dict()
+        if merged_logs:
+            payload["logs"] = merged_logs
+        # What the selector needs and the retrieval does not carry.
+        payload["alert_time"] = run.event_time.isoformat() if run.event_time else None
+        payload["entity_host"] = run.entity_host
+        payload["entity_user"] = run.entity_user
+        # Events an analyst chose by hand, recorded by the re-analysis request.
+        # Without this the picks were accepted, stored, and then ignored by the
+        # run they were supposed to steer.
+        reanalysis = ((run.result_json or {}).get("reanalysis") or {})
+        payload["pinned_keys"] = list(reanalysis.get("pinned_refs") or [])
+        # The fields and filters the analyst had on screen when they chose.
+        # Same reason as the pins: accepted and stored is not the same as used,
+        # and this is the hop where that difference used to be lost.
+        payload["extra_fields"] = list(reanalysis.get("extra_fields") or [])
+        payload["log_filters"] = list(reanalysis.get("log_filters") or [])
+        return payload, row_id
+    except Exception as exc:  # noqa: BLE001 — enrichment never fails an alert
+        logger.warning("Log context for run %s could not be collected: %s", run_uuid, exc)
+        return None, None
+
+
+def _finalise_log_context(run_uuid: uuid.UUID, row_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """The summary that travels on the run, once the analysis has been written."""
+    from app.services import alert_log_context_store as store
+
+    try:
+        with Session(sync_engine) as db:
+            row = store.for_run(db, run_uuid)
+            if row is None:
+                return {"status": "unavailable", "log_count": 0}
+            # The verdict now exists and was formed over exactly these events.
+            store.mark_analysed(db, row)
+            summary = store.as_payload(row, include_logs=False)
+            summary["logs_endpoint"] = f"/api/alert-investigations/{run_uuid}/logs"
+            summary["ai_selection"] = (
+                (payload.get("ai_report") or {}).get("log_selection")
+                or (payload.get("assistant_report") or {}).get("log_selection")
+                or payload.get("log_selection")
+            )
+            return summary
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Log context for run %s could not be finalised: %s", run_uuid, exc)
+        return {"status": "unavailable", "log_count": 0}
+
+
+def _record_alert_investigation(run_uuid: uuid.UUID, payload: dict, run: Any) -> None:
+    """Write the investigation record for an alert. Fail-open, by contract.
+
+    Same contract as the email one: a recording bug must never take an
+    investigation down, and the loud half lives on the record —
+    `incomplete_steps` names every step that failed to record, and the page
+    says so above the chain.
+
+    The actor is `automated_ingest` rather than `predates_attribution`, and
+    the distinction is the point: an alert **arrives**, with no human
+    submitting it. Claiming an actor existed and was not recorded would be
+    false here, where it is true of an email upload.
+    """
+    try:
+        from app.models.database import ACTOR_AUTOMATED_INGEST
+        from app.services.alert_investigation_steps import derive
+        from app.services.investigation_recorder import (
+            InvestigationRecorder, persist_sync,
+        )
+
+        recorder = InvestigationRecorder(
+            origin_surface="alert",
+            origin_id=str(run_uuid),
+            tenant_id=getattr(run, "tenant_id", None),
+            actor_kind=ACTOR_AUTOMATED_INGEST,
+        )
+        derive(payload or {}, recorder)
+        summary = (payload or {}).get("summary") or {}
+        verdict = str(summary.get("overall_verdict") or "") or None
+        with Session(sync_engine) as db:
+            persist_sync(recorder, db, verdict=verdict)
+    except Exception:  # noqa: BLE001
+        logger.exception("investigation record not written for alert %s", run_uuid)

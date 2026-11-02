@@ -1,0 +1,253 @@
+# Sending alerts from TraceCat
+
+## What went wrong
+
+```
+HTTPConnectionPool(host='10.45.0.71', port=8000): Max retries exceeded with url:
+/api/alert-investigations (Caused by NewConnectionError(... [Errno 111] Connection refused))
+```
+
+`Connection refused` is not a timeout and not a dropped response — nothing was
+listening on port 8000 when TraceCat tried to connect. The API container was
+being rebuilt at the time.
+
+Two separate failures were happening, and only the first was visible to TraceCat:
+
+1. **The API was down** for the seconds a rebuild takes, so the connection was
+   refused outright.
+2. **Runs already in flight were killed.** Rebuilding the worker sends SIGTERM
+   and then SIGKILL 10 seconds later, while the median alert investigation takes
+   86 seconds. Three runs were left stuck in `processing` with no worker
+   executing them and nothing to notice.
+
+Both are fixed below. The rest of this page is how to call the endpoint so that
+neither a restart nor a network blip can lose an alert.
+
+## Call it asynchronously
+
+`POST /api/alert-investigations` defaults to `wait=true`, which holds the HTTP
+connection open until the investigation finishes and returns the whole report.
+Measured over 3,027 runs: median **86s**, p95 **128s**, ceiling **300s**.
+
+A connection held open for a minute and a half is the fragile part. Any restart,
+proxy idle timeout or network blip destroys the response — even though the
+investigation itself is queued and completes fine.
+
+**Send it queued instead:**
+
+```http
+POST /api/alert-investigations?wait=false
+Content-Type: application/json
+
+{
+  "alert_body": "<the raw alert>",
+  "title": "<rule name>",
+  "external_ref": "<TraceCat's own id>",
+  "callback_url": "https://tracecat.internal/webhooks/alert-report"
+}
+```
+
+Returns immediately:
+
+```json
+{ "run_id": "92a8df26-…", "status": "queued", "deduplicated": false }
+```
+
+Then get the report either way:
+
+- **Callback** — set `callback_url` and the finished report is POSTed to it.
+- **Poll** — `GET /api/alert-investigations/{run_id}` until `status` is
+  `completed`; add `?format=report` on `/export` for the report array.
+
+Nothing is held open, so there is no long connection left to break.
+
+## Retrying is safe
+
+Ingest deduplication is on by default (`alert_ingest_dedupe`, 60-minute window),
+keyed on the alert body. Re-sending an identical alert returns the original run
+rather than investigating it again:
+
+```
+POST 1 → run_id 92a8df26-…  deduplicated: false
+POST 2 → run_id 92a8df26-…  deduplicated: true   (X-Alert-Deduplicated: true)
+```
+
+So TraceCat should retry on `ConnectionError` without hesitation — a retry after
+a refused connection costs nothing and cannot start a second investigation of the
+same alert. Retry with backoff on connection errors and on 502/503/504.
+
+Use `external_ref` for TraceCat's own identifier so a run can be found later
+without storing `run_id` anywhere.
+
+## What the platform now guarantees
+
+- **Deploys drain instead of killing.** The worker has a 300s stop grace period
+  and the API 330s, so Celery finishes in-flight investigations and uvicorn
+  finishes in-flight requests before the container goes away.
+- **Abandoned runs are re-queued within minutes.** `tasks.recover_stuck_alert_runs`
+  runs every 3 minutes, asks the workers what they are actually executing, and
+  re-queues anything claiming to be in flight that nobody is working on. It gives
+  up after 3 attempts and fails the run loudly rather than looping.
+  Without it, a killed task waits for Redis's visibility timeout — up to an hour.
+- **Restarts no longer strand work.** `task_acks_late` plus
+  `task_reject_on_worker_lost` means a lost task returns to the queue rather than
+  vanishing.
+
+## What is still worth knowing
+
+The API is a single container. A rebuild is still a few seconds of refused
+connections — the grace period protects requests already in progress, not new
+connections arriving while the container restarts. With retries configured in
+TraceCat this is invisible. Removing it entirely means running two API replicas
+behind a proxy, which this deployment does not currently do.
+
+---
+
+## ConnectTimeout on the preflight (September 2026)
+
+TraceCat began reporting this, often enough to lose whole batches:
+
+```
+DELIVERY FAILED — Alert-Investigations
+Endpoint: http://10.45.0.71:8000/health
+Final status/error: ConnectTimeout: Connection to 10.45.0.71 timed out (connect timeout=10)
+Attempts: 0
+Preflight health check failed after 3 attempts. 1 incident(s) were not sent this run.
+```
+
+It arrived during authentication work, which made the authentication look
+responsible. It was not: a refused credential returns 401 immediately. A
+**connect timeout** means the TCP handshake got no answer at all, which happens
+before anything reads a header.
+
+Two real causes, both found by measurement rather than inspection.
+
+### The API was genuinely absent, for 27 seconds at a time
+
+Every restart takes the published port with it, and TraceCat's preflight budget
+is three attempts at a 10-second connect timeout — 30 seconds. A 27-second
+outage sits inside that budget and exhausts it.
+
+Nineteen of those 27 seconds were *shutdown*. `stop_grace_period` is 330s, and
+uvicorn waits for open connections before exiting — and `/api/sse` streams stay
+open for as long as a browser tab is watching an investigation. One idle tab
+could hold the API down for minutes.
+
+Fixed by bounding it in `docker-compose.yml`:
+
+```yaml
+command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5
+```
+
+Five seconds is ample for the HTTP requests this API actually serves — the long
+work runs in Celery — and an `EventSource` reconnects on its own. The window now
+fits inside TraceCat's retries, so a restart delays a delivery instead of
+losing it.
+
+### The preflight path was never a route
+
+`/health` has no `/api` prefix, so it has never existed here. It used to 404;
+once default-deny went in it became a 401, because an unknown path is refused
+before routing happens. Either way the preflight could only fail.
+
+`/health` is now a public alias of `/api/health`, returning the same payload.
+Adding the alias rather than editing the appliance is deliberate — these
+integrations are meant to keep working untouched, and a liveness probe is the
+one thing that has to answer before a caller has established anything.
+
+### Telling a block apart from an outage, next time
+
+A dropped packet is silent by design, so "the sender was blocked" and "the
+sender timed out" look identical from outside. The firewall now logs what it
+drops, rate-limited so a port scan cannot flood the kernel log:
+
+```bash
+grep TIP8000DROP /var/log/kern.log        # nothing here → it was not the firewall
+docker compose exec firewall iptables -L DOCKER-USER -n -v   # per-rule counters
+```
+
+For the record, during this incident the DROP counter was frozen at 210 while
+the allow rule passed 1,943 packets, and TraceCat was delivering successfully
+throughout — which is how the firewall was ruled out.
+
+### Still true
+
+`INGEST_CIDR` is a single host, `172.23.10.16/32`. If TraceCat ever gains a
+second egress address, everything from it is dropped and looks exactly like
+this again — the kernel log above is what distinguishes the two.
+
+---
+
+## A second sender, silently dropped (September 2026)
+
+TraceCat at **172.20.30.35** had never once reached the application. Not a
+single line in 72 hours of API logs, while the sender at 172.23.10.16 showed
+151. The alerts were not rejected, not queued and not lost in the app — they
+never arrived.
+
+The firewall allowlist added with authentication took a **single** address:
+
+```yaml
+INGEST_CIDR: "172.23.10.16/32"      # one sender, by construction
+```
+
+Everything else reaching port 8000 from outside was dropped. 194 packets from
+172.20.30.35 sat in the kernel log, arriving on `enp6s18` to dport 8000, from
+2026-09-22 12:01 through 2026-09-23 00:13.
+
+This is the failure mode the drop logging was added for. A dropped packet is
+silent on this side by design, so from the application there is nothing at all
+to find — no 401, no connection error, no log line. The sender sees a connect
+timeout and everyone reasonably suspects the application.
+
+```bash
+grep TIP8000DROP /var/log/kern.log | sed -E 's/.*SRC=([0-9.]+).*/\1/' | sort | uniq -c | sort -rn
+#   194 172.20.30.35     <- never reached the API
+#    15 10.10.126.151
+```
+
+### Fixed at both layers
+
+There are two independent gates, and a sender has to pass both:
+
+| Layer | Setting | Effect if missing |
+|---|---|---|
+| Host firewall (`DOCKER-USER`) | `INGEST_CIDRS` in `docker-compose.yml` | packet dropped, connect timeout, nothing logged by the app |
+| Authentication middleware | `INGEST_TRUSTED_CIDRS` in `.env` | request arrives and gets 401 |
+
+`INGEST_CIDR` became `INGEST_CIDRS`, space-separated and looped over, because
+the singular form is what made one sender the structural maximum. The auth
+half always took a comma-separated list; a test now pins the multi-sender case
+so the two halves cannot drift apart again.
+
+Adding a sender grants **POST to the ingest routes and nothing else** — the
+same address is still refused on GET and DELETE. Verified for both senders.
+
+### Adding another sender
+
+```yaml
+# docker-compose.yml, firewall service
+INGEST_CIDRS: "172.23.10.16/32 172.20.30.35/32 <new>/32"
+```
+```bash
+# .env
+INGEST_TRUSTED_CIDRS=172.23.10.16/32,172.20.30.35/32,<new>/32
+```
+```bash
+docker compose up -d --force-recreate firewall api worker beat
+```
+
+Both layers, or it fails in one of the two ways above. Check it landed:
+
+```bash
+docker compose exec firewall iptables -L DOCKER-USER -n -v   # a RETURN per sender, above the DROP
+docker compose logs api | grep "Ingest exemption active"
+```
+
+### Worth saying about this mechanism
+
+An IP allowlist is weaker than a credential: anything able to occupy or spoof
+one of these addresses inherits an unauthenticated route to the ingest
+endpoint. It exists only because these appliances cannot carry a header. If
+either sender can be given one, an API key is strictly better and the address
+can come back off both lists.

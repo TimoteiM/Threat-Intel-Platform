@@ -19,3 +19,31 @@ artifacts/
 .mypy_cache/
 .coverage
 htmlcov/
+nul
+
+# Host trust material bind-mounted into containers (CA certificates and the
+# like). The README explains what belongs here; nothing else is committed.
+# secrets/* rather than secrets/: git does not descend into an ignored
+# directory, so a negation inside one never applies and the README could not
+# be committed to explain what the directory is for.
+secrets/*
+!secrets/README.md
+
+# Database dumps. A 689M production dump appeared in the repo root on
+# 2026-10-14 and was NOT ignored, so any `git add -A` would have committed
+# the whole alert corpus — bodies, hostnames, account names — to the remote.
+# Ignored by pattern rather than by name: the next one will have a different
+# date in it.
+*.dump
+*.sql
+*.sql.gz
+*.pgdump
+*.tar.zst
+
+# ...but scripts/ holds source, not data. `*.sql` above silently swallowed
+# scripts/db_roles.sql and scripts/check_db_privileges.sql — the role
+# definitions and the privilege check — so the commit that added them
+# referenced two files a fresh clone would not have, from the README, from
+# liveness.sh and from both shell wrappers. Narrow on purpose: a dump dropped
+# in scripts/ would still be committed, so do not put one there.
+!scripts/*.sql

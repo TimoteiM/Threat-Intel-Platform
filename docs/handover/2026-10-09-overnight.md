@@ -1,0 +1,162 @@
+# Overnight handover — 2026-10-09
+
+Branch `feature/email-investigation-upload`. Commits only, no pushes. Appended as each item progresses.
+
+## Decisions waiting on you
+
+- **Item 1 — should the cases page stop writing the spine?** I left `GET /detections/correlated-cases` materialising spine rows (now conflict-safe), because it is the de-facto case creator: of 303 live cases (`alert_case_spine`, `created_at - opened_at < 24h`, created in the 14 days to today), **224 (74%) were created outside the hourly job's :05 slot**, i.e. by page loads. Turning it off moves case creation — and so MTTD (`created_at - opened_at`) and the start of the closing job's 10-minute quiet period — onto the hourly cadence. Making the read non-writing needs `case-correlation-hourly` to run more often, and that cadence is a constant you haven't approved. Your call: a cadence (e.g. every 2–5 min, the pass skips when nothing new arrived), or accept the read as the writer.
+- **Item 2 / SLA — which closure kinds count as a resolution?** `/detections/sla` should presumably exclude `expired`, `merged` and `unreadable` the way `aged_out` was meant to be (`detections.py:1094` already excludes `{aged_out, expired, merged}` elsewhere, but not `unreadable`). Its `alerts_at_close or 1` also files never-counted cases as single-alert. Fixing either moves the SLA figures you report, so I left both.
+- **Item 4 — a frontend test runner?** The frontend has none, so tonight's graph rules are proven by a scratch Chromium harness, not by a test in the repo. Adding vitest, or committing the harness, is a new dependency you haven't approved.
+- **Item 9 ceiling value** — mechanism built with the ceiling unset (no filtering until you approve a number). Proposed value: _pending item 8 distribution_.
+
+## Contradictions with what we concluded today
+
+0. **Item 4: the band does size to its children. The nodes outside it were never its children.** I measured the real `CaseGraph.tsx`, bundled and rendered in headless Chromium, on #1440 and 7 random cases. In every band, 0 children escaped (body or label). What was drawn beside the band rather than inside it:
+   - the host node itself, never parented to the band named after it;
+   - every registry value, because the extractor recorded no `host` on any of the 71,279 stored ones;
+   - empty bands (7 of 8 cases), each rendering as a node-sized rectangle on top of a real node.
+
+1. **The member-list cap was still live on both closing writers** (item 2). The review service treated `alerts_at_close = 100` as a historical floor. But `case_closure_task` and the analyst close both recorded `len(case["alerts"])`, and `case_by_key` caps `alerts` at 100. On `alert_case_spine`, 31 closed rows read exactly 100 and **0 rows have ever recorded more than 100**. Every case that outgrew the cap was still being stored as a floor. Fixed tonight. The 31 historical rows stay floors.
+2. **"All of them closed automatically" is false for one case** (item 2). #61 (judged on ≥100 of 561) has `closure_kind = analyst` with `closed_by` NULL. It and #892 were closed by a person before `closed_by` existed (`84a56b6`). The review read the missing name as "automatic" and told #61's reader "nobody's assessment is in question". Corrected: 59 automatic, 1 analyst whose name was never recorded.
+3. **The disposition-review population is growing, not frozen** (item 2). It was 30, then 56 earlier today, and is **60** now (of 1,005 with a disposition). Seven of the flagged cases closed on 2026-10-09, after both close-anchor fixes: #1964 (3 of 114), #1908, #1978, #1947, #1943, #1919, #1950. The service docstring says those fixes "stop the thirty becoming thirty-one". They can't. A straggler that repeats a detection appends to a closed case by design, so a closed case's membership keeps growing after its verdict. I haven't changed this; it is a design question.
+4. **`/detections/sla` excludes a closure kind nobody writes** (found during item 2, not fixed). It skips only `closure_kind == "aged_out"`, and the spine has **zero** such rows, because the expiry path writes `expired`. At the endpoint's default 30 days, 93 `expired`, 17 `merged` and 33 `unreadable` closures (143 cases never answered) are counted as resolutions. `alerts_at_close or 1` then files them all in the single-alert bucket. The agreed "aged-out cases are excluded from MTTR" holds only in name.
+
+## Pre-agreed scope for tonight
+
+- Item 8: new table approved; rebuild api, worker, beat; verify watchdog.
+- Item 9: build mechanism + allowlist, leave the value unset.
+
+---
+
+## Item 1 — a GET creates cases and can 500
+
+**Done.** Committed (see `git log`, "Let the database decide who creates a case").
+
+**Reproduced first, on the read path.** Scratch database (`CREATE DATABASE` on the same Postgres server, full `Base.metadata` schema, 3 alerts × 6 hosts in `alert_body_investigation_runs`). Entry point: `app.api.detections.get_correlated_cases`, the function behind `GET /api/detections/correlated-cases`, called directly with the request object left out (in-process identity). That skips HTTP and auth middleware and nothing else. 8 concurrent calls: **7 raised `IntegrityError` on `alert_case_spine_pkey`**, each one a 500.
+
+**Fix.**
+- `upsert_spine` now does `INSERT … ON CONFLICT (case_key) DO NOTHING RETURNING` and then reads the row back. Whoever loses the race refreshes the winner's row like any existing case. `case_number` comes from `nextval` inside the INSERT. A losing insert burns a number, so there are gaps; the existing `uq_alert_case_spine_case_number` keeps numbers unique.
+- The `case_number IS NULL` backfill branch is now a conditional `UPDATE … WHERE case_number IS NULL`.
+- Two lookups no longer write at all:
+  - `case_for_run` (`GET /alert-investigations/{id}/case`, where `hours` runs 1–720).
+  - `case_by_key`'s full-estate fallback, which had persisted every case at the lookup's window. The closing job calls it every minute.
+
+**Why the cases list still writes.** See the decision at the top. It is now idempotent under concurrency, and the reason is in a comment at the call site.
+
+**Test.** `tests/integration/test_case_read_concurrency.py` runs against real Postgres, using a scratch DB that it creates and drops. If no server is reachable it skips and says so.
+- 24 concurrent reads across two windows (48h/96h) and 6 hosts must produce no exception, one row per key, unique non-null numbers, and every reader told the same number per key.
+- The alert-page lookup at 5 windows must write zero rows.
+- **Negative control:** with the service changes reverted, the first test fails with **23 of 24 reads raising**, and the second finds **18 spine rows** minted by the lookups.
+- Two unit fakes (`test_case_store.py`, `test_correlation_sources.py`) now model the insert and read-back by query name, instead of the old check-then-insert.
+
+**Gate.**
+- Suite: 14 failed / 2152 passed. That is the same 14 as baseline (diffed), plus 2 new passing tests.
+- #1440 is 6/6, checked with `app.cli.case_graph 1440` in the worker at the endpoint default (`hours=720`), path `case_by_key -> graph_for_runs`.
+- api/worker/beat rebuilt. Watchdog: pipeline not stalled, schema ok. Ingest still alarms on appsec-agent (17d) and fortigate (23d), both already known before tonight.
+
+**Unresolved.**
+- `open_continuation` in `alert_case_store.py` has the same check-then-insert shape, but nothing calls it (dead code). I left it alone.
+- `case_for_run` finds an alert only within the first 100 members of `case["alerts"]` (the `max_members` cap). An alert past position 100 of a large case gets "no case" on its alert page. I saw this and didn't fix it, because it's outside item 1.
+
+## Item 2 — the 24 "judged on 100" dispositions
+
+**Done.** Committed ("A count taken from a capped list is a floor…").
+
+**Measured.**
+- Run as `python -m app.cli.disposition_review` in the worker. Path: `correlate_alerts(hours=17520, persist=False, max_members=100000)` joined to `alert_case_spine`.
+- 60 flagged of 1,005 with a disposition. 24 read exactly 100. Contradiction 3 explains why it's 60 and not 56.
+- `alert_case_spine`: 31 closed rows at exactly 100, none above it (contradiction 1). The 7 not in the 24 have a resolution outside `DISPOSITIONS`, or don't hold more than 100 today.
+
+**What changed.**
+- New absence kind `lower_bound` (`absence.py`). The floor had been filed as `unparsed`, which claims a shape-check failure. This value parsed fine and is wrong in a known direction.
+- `judged_on` in the review and `alerts_at_close` in every lifecycle payload now carry the `lower_bound` absence for exactly 100:
+  - the cases list, both branches;
+  - the `/case/{key}` spine block.
+  - `types.ts` widened to match. The frontend doesn't render either field today. `tsc --noEmit` is clean.
+- Attribution reads `closure_kind`, so it no longer infers "automatic" from a missing name (contradiction 2). The CLI shows "(analyst, unrecorded)".
+- **Gap closed:** both writers now record `case["alert_count"]` (the uncapped count) rather than the length of the capped list.
+  - `case_closure_task.py` (the closing job);
+  - `detections.py` (analyst close).
+- An exactly-100 value is still reported as a floor even after the fix. No column says which writer produced a row, so the claim that is always true is the one made.
+
+**Tests.**
+- `test_disposition_review.py`: 4 new tests for the floor, the payload helper and analyst attribution.
+- `tests/integration/test_case_close_count.py`: a 120-alert case on a scratch Postgres is formed by `correlate_alerts` and closed by the real `close_quiet_cases`, then must record 120. **Negative control:** with the closure-task fix reverted it records **100**.
+- I factored the scratch-DB setup into `tests/integration/_scratch_db.py`, which the item 1 test also uses now.
+
+**Gate.**
+- Suite: 14 failed / 2157 passed, the same 14 (diffed).
+- #1440 is 6/6 at `hours=720`.
+- Rebuilt api/worker/beat. Watchdog: pipeline and schema green; ingest unchanged (the two known silent sources).
+
+**Unresolved.**
+- The SLA findings (contradiction 4, decision at top).
+- `case_closure_task` still passes `len(members)` (capped) as `member_count` into the narrative fingerprint, while correlation computes the fingerprint from the full count. For a case over 100 alerts the two fingerprints can never agree, which may re-queue its narrative. I haven't measured this.
+
+## Item 3 — the two unprovenanced pointers
+
+**Done.** Migration 059 is applied to the live database (`alembic current` = 059). Committed ("Every supersession pointer says who wrote it").
+
+**What wrote them.** `alert_case_store.absorb_superseded`, the live correlation pass. It set `superseded_by_case_key` and nothing else; its chain-collapse UPDATE did the same. Only the one-off CLI (`app.cli.case_supersession`) ever set a state, so every pointer the platform wrote after that CLI ran was unprovenanced. I know the writer by elimination, not by assumption:
+- Every other pointer writer also sets a state (the CLI) or a note (`collapse_chains`). Migration 044 only clears pointers.
+- Both rows match the shape absorption selects: same host, dead session starting inside the target's (by 0.04 s and 0.69 s).
+- #1973 was closed `merged` 25 ms before its target #1974 was created, which is one transaction.
+- Neither write (14:29 and 16:12) fell in the hourly :05 slot, so both came from page loads.
+
+**Measured on `alert_case_spine`.**
+- Before: 866 pointers, of which 848 `mapped`, 16 `merged` and 2 NULL (#1866 → #1867, #1973 → #1974).
+- After: 848 `mapped`, 18 `merged`, 0 NULL.
+
+**What changed.**
+- `absorb_superseded` writes `supersession_state = 'merged'` plus a dated note. `merged` is the existing state for "the platform recorded where this case went, at the time". The note is appended, so a row the CLI left `ambiguous` keeps its record.
+- The collapse UPDATE does `coalesce(state, 'merged')`, so it keeps whatever provenance a row had.
+- A released row is a live case again, so its state goes to NULL and the note records the release. Before this, a `mapped` row with no pointer would have contradicted itself.
+- **Gap closed in the database:** CHECK `ck_case_spine_pointer_has_provenance` (`superseded_by_case_key IS NULL OR supersession_state IS NOT NULL`), declared on the model too. Migration 059 backfills by the condition, not by the two keys, then adds the constraint.
+- `reset_supersession_stats()` now clears the dict. It had left a `released` key behind, which made a unit test depend on test order once a real release ran in the same process.
+
+**Tests.** `tests/integration/test_pointer_provenance.py`, real Postgres:
+- absorption writes `merged` with a note;
+- the database refuses a stateless pointer;
+- a release clears the state and keeps the history in the note.
+- **Negative control:** with the service change reverted, absorption raises `CheckViolationError`. So **the code must deploy before migration 059 runs**, which is the order I used: rebuild, then migrate, then rebuild again.
+
+**Gate.**
+- Suite: 14 failed / 2160 passed, the same 14 (diffed).
+- #1440 is 6/6 at `hours=720`.
+- api/worker/beat rebuilt before and after the migration. Watchdog: schema ok, pipeline not stalled, ingest unchanged.
+- No `CheckViolation`, `IntegrityError` or traceback in api/worker/beat logs since the deploy.
+
+**Unresolved.**
+- #1866 was an auto-closed `false_positive` when absorption pointed it at #1867 a day later. I left its resolution alone (hard stop on verdicts). Whether absorbing an already-answered case is right is a question about absorption, not about provenance.
+
+## Item 4 — narrative band containment
+
+**Done.** Committed ("A node belongs inside its machine's band…").
+
+**How I measured.** I bundled the real `frontend/src/components/detections/CaseGraph.tsx` with esbuild, with only `getCaseGraph` stubbed to return the JSON that `app.cli.case_graph N --json` produces. That JSON is the graph endpoint's own path: `case_by_key -> graph_for_runs` over the `alert_graph_entity`/`alert_graph_edge` tables. I rendered it in headless Chromium (Playwright, installed in scratch, not in the project) and measured from the page's live Cytoscape instance. A headless Cytoscape-only reproduction showed nothing, which is why I moved to the real page.
+
+**Before/after on the same 8 cases** (#1440, 117, 532, 155, 1184, 1069, 1947, 464). "Before" is the component at HEAD on the pre-backfill JSON; "after" is the new component on the post-backfill JSON.
+- Nodes that name a host but are drawn outside its band: **11 → 0**.
+- Empty bands: **7 → 0**.
+
+The populations differ by design. "Before" can only count nodes that named a host, which is essentially the host nodes. The registry values had no host, so they couldn't even be counted as misplaced. "After" counts 413 host-attributed nodes, all inside.
+
+**What changed.**
+- Extractor: `registry_value` and `security_control` now carry `host=local`. Their merge keys already asserted it (`registry:{local}:…`). New test in `test_graph_extraction.py`.
+- Re-ran `python -m app.cli.graph_backfill` (documented as idempotent) in the worker: 15,484 alerts in 393 s.
+  - `alert_graph_entity`: registry values with `host` went from 2 of 71,279 to **74,649 of 74,649**.
+  - The backfill also grew every other kind (process 72,810 → 76,154, account 18,453 → 18,970, unparsed 4,788 → 5,045; edges 190,422 → 196,406). **The tables were stale against the current extractor before tonight**, independent of this change. Item 8 is built on the refreshed tables.
+- `CaseGraph.tsx`:
+  - Each visible node's band is decided first, and only bands with members are drawn.
+  - The host node sits in its own band.
+  - A node joins a band only on the host it names. Nothing is inferred from neighbours: domain accounts and techniques stay outside, correctly.
+  - `tsc --noEmit` is clean.
+
+**Gate.**
+- Suite: 14 failed / 2161 passed, the same 14 (diffed).
+- #1440 is 6/6 at `hours=720` after the backfill.
+- api/worker/beat rebuilt. Watchdog unchanged (pipeline and schema green, the two known silent sources).
+- Frontend container rebuilt; it serves 200.
+
+**Unresolved / found on the way.**
+- **A tenth extractor delimiter shape:** #1184 draws "hosts" named `systemroot` and `windows`, parsed from UNC-looking text in command lines (`_UNC` in the remote-execution block). 3 runs each, `basis = parsed`. I recorded it and did not fix it.

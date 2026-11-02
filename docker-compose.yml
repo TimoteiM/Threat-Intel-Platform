@@ -1,15 +1,20 @@
-version: "3.9"
-
 services:
   # ── Database ──
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: threatintel
       POSTGRES_PASSWORD: threatintel
       POSTGRES_DB: threatintel
+      PGDATA: /var/lib/postgresql/data/18/docker
     ports:
-      - "5432:5432"
+      # Loopback only. This was published on every interface with the
+      # credentials that are two lines above, so the whole dataset was readable
+      # from the network without touching the API at all. Containers reach it
+      # as "postgres:5432" over the compose network, which does not use this.
+      # An operator who wants a SQL client can tunnel: ssh -L 5432:127.0.0.1:5432
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,38 +26,228 @@ services:
   # ── Redis (queue + pub/sub) ──
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
-      - "6379:6379"
+      # Same reasoning, and Redis had no password at all: it answered PING and
+      # listed 1,776 keys from the network.
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+  # ── Host firewall for the published API port ──
+  # Docker publishes ports by DNAT in the nat table, which never traverses the
+  # INPUT chain — so a ufw or iptables INPUT rule for 8000 looks applied and
+  # filters nothing. The rules belong in DOCKER-USER, which sits at the top of
+  # FORWARD, and Docker flushes that chain whenever the daemon restarts. Hence a
+  # container rather than a one-off command: it re-applies on every boot and on
+  # every daemon restart, and the rules live in version control instead of in
+  # somebody's shell history.
+  #
+  # Filtering is by *interface*, not by container address. Container IPs change
+  # on recreate, and a stale address rule either reopens the port silently or
+  # starts dropping the frontend's own traffic. Only packets arriving on a
+  # non-container interface are considered; frontend-to-api rides the compose
+  # bridge and is never touched.
+  firewall:
+    image: alpine:3.20
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    environment:
+      # The alert senders. Everything else reaching 8000 from outside is dropped.
+      #
+      # Space-separated, and looped over below. It was a single value, which
+      # silently supported exactly one sender: a second TraceCat at
+      # 172.20.30.35 was dropped for a day with nothing in the API log,
+      # because a dropped packet leaves no trace on this side at all.
+      #
+      # Keep this to exact hosts. Anything able to occupy or spoof one of
+      # these addresses inherits an unauthenticated route to the ingest
+      # endpoint — weaker than an API key, and only used because these
+      # appliances cannot carry one.
+      # 172.23.39.16 added 2026-10-27: the NiFi sending tenant c29. It had been
+      # posting since at least 2026-10-26 04:33 and every packet was dropped —
+      # 30 TIP8000DROP records — with nothing in the API log, which is exactly
+      # the failure this comment already described for 172.20.30.35.
+      INGEST_CIDRS: "172.23.10.16/32 172.20.30.35/32 172.23.39.16/32"
+      EXTERNAL_IFACES: "enp6s18 virbr0"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache iptables >/dev/null
+        apply() {
+          for IF in $$EXTERNAL_IFACES; do
+            # Remove first so re-running never stacks duplicates.
+            for CIDR in $$INGEST_CIDRS; do
+              while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$CIDR -j RETURN 2>/dev/null; do :; done
+            done
+            while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -j DROP 2>/dev/null; do :; done
+            while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "TIP8000DROP " 2>/dev/null; do :; done
+            # Inserted in reverse, so the chain ends up RETURN, LOG, DROP.
+            iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -j DROP
+            # A dropped packet is silent by design, which makes "the sender timed
+            # out" and "the sender was blocked" look identical from the outside.
+            # Rate-limited so a port scan cannot flood the kernel log.
+            iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "TIP8000DROP "
+            for CIDR in $$INGEST_CIDRS; do
+              iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$CIDR -j RETURN
+            done
+          done
+          echo "[firewall] DOCKER-USER rules applied for: $$EXTERNAL_IFACES (allow $$INGEST_CIDRS)"
+        }
+        apply
+        # Docker rebuilds its chains on daemon restart without restarting this
+        # container, so the rules are re-asserted rather than applied once.
+        while true; do
+          sleep 300
+          iptables -C DOCKER-USER -i $${EXTERNAL_IFACES%% *} -p tcp --dport 8000 -j DROP 2>/dev/null || apply
+        done
+
   # ── Backend API ──
   api:
     build:
       context: ./backend
       dockerfile: ../docker/Dockerfile.api
+    restart: unless-stopped
+    # A POST that waits for its report holds the connection for ~86s (p95 128s).
+    # With the default 10s grace period a restart cut those callers off; uvicorn
+    # drains in-flight requests on SIGTERM if it is given the time.
+    stop_grace_period: 330s
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # Three connections, three privilege levels — scripts/db_roles.sql and
+      # the README's "Database connections". The role names are here because
+      # they are not secret and seeing which role a service holds is the
+      # point; the passwords come from .env, which is gitignored.
+      DATABASE_URL: postgresql+asyncpg://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SANITIZER_URL: postgresql://tip_sanitizer:${TIP_SANITIZER_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      # Alembic only. Never held by a serving process.
+      DATABASE_MIGRATION_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "opencti.siembiot.expertware.net:172.20.30.16"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     volumes:
       - ./backend:/app
+      # The per-client source map: which platforms each client runs and how to
+      # reach each one. Deployment input, read-only, and carries no
+      # credentials — those are in tenant_integrations, encrypted.
+      - ./config:/config:ro
       - artifacts:/app/artifacts
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      # The internal CA that signed the CAPE reverse proxy's certificate.
+      # Read-only, and a single file rather than the whole secrets/ directory
+      # so these containers can see the trust anchor and nothing else that
+      # may later be put alongside it. The public certificate only — the CAPE
+      # token is not here, it arrives through env_file.
+      #
+      # The file must exist on the host BEFORE these containers are created:
+      # Docker silently creates a directory at a missing bind source, and a
+      # directory named cape-internal-ca.crt then blocks the real file.
+      - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
+      # The whole directory, read-only, for certificates added later. A bind
+      # to a *file* that does not exist yet makes Docker create a directory in
+      # its place, which then blocks the real file; the directory itself always
+      # exists, so a cert dropped into secrets/ is simply there next time.
+      - ./secrets:/run/secrets/tip:ro
+    # --timeout-graceful-shutdown bounds how long a stop can take. Without it
+    # uvicorn waits for open connections to close, and /api/sse streams stay
+    # open for as long as a browser tab is watching an investigation — with a
+    # 330s grace period above, one idle tab could hold the API down for
+    # minutes. Every second of that is a second TraceCat's preflight cannot
+    # connect, and a failed preflight means a batch of alerts is not sent at
+    # all. Five seconds is ample for real HTTP requests here: the long work
+    # runs in Celery, and an EventSource reconnects on its own.
+    # NO `--reload`, decided 2026-10-13. It was on for part of 2026-10-12
+    # and is off again deliberately.
+    #
+    # `backend/` is bind-mounted at /app and this box ingests live alerts, so
+    # WatchFiles would swap the running analyser mid-ingest on *any* save
+    # under backend/ — including a file someone opens to read and saves out
+    # of habit, or an editor writing on focus-loss. Ordinary on a development
+    # box, wrong on one carrying real traffic.
+    #
+    # The cost is that a running process keeps the modules it imported at
+    # startup, which on 2026-10-12 left seven backend commits pushed and not
+    # serving for an afternoon while every filesystem check said "deployed".
+    # That is now detectable rather than invisible: /health carries
+    # `code.imported_at` and `code.code_fingerprint`, and the worker answers
+    # the same through `app.tasks.pipeline_watch_task.code_version`. After a
+    # backend change, `docker compose restart api worker beat` — all three.
+    # See docs/deploy/schema-changes.md.
+    #
+    # And since 2026-10-14 that restart is *enforced* rather than remembered.
+    # The decision above stayed correct and cost a bug anyway, because nothing
+    # made the restart mandatory: on 2026-10-14 the api served code 3h11m
+    # older than the commit it was supposedly running, and an integrations
+    # card rendered "Uncategorised" because the payload it received predated
+    # the field.
+    #
+    # The detectability described above already existed and the check did not
+    # use it: `scripts/liveness.sh` read the api fingerprint with
+    # `docker compose exec api python`, a fresh interpreter that imports
+    # whatever is on disk — so with this bind mount it reported the files and
+    # never the process, and printed "in sync" throughout. It now reads
+    # `code.code_fingerprint` over HTTP from the serving process and exits
+    # non-zero when the api and worker disagree. A correct decision with no
+    # enforcement is a decision that will be forgotten once.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5
 
   # ── Celery Worker ──
   worker:
     build:
       context: ./backend
       dockerfile: ../docker/Dockerfile.worker
+    restart: unless-stopped
+    # Celery stops warm on SIGTERM: it stops accepting work and finishes what it
+    # is already running. Docker's default grace period is 10s, and the median
+    # alert investigation takes 86s, so every deploy was SIGKILLing runs in
+    # flight and leaving them stuck in `processing`. Long enough for the p95
+    # (128s) with room; a run past this is caught by tasks.recover_stuck_alert_runs.
+    stop_grace_period: 300s
+    shm_size: '2gb'
     env_file: .env
+    environment:
+      # Three connections, three privilege levels — scripts/db_roles.sql and
+      # the README's "Database connections". The role names are here because
+      # they are not secret and seeing which role a service holds is the
+      # point; the passwords come from .env, which is gitignored.
+      DATABASE_URL: postgresql+asyncpg://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SANITIZER_URL: postgresql://tip_sanitizer:${TIP_SANITIZER_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      # Alembic only. Never held by a serving process.
+      DATABASE_MIGRATION_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "opencti.siembiot.expertware.net:172.20.30.16"
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,20 +255,93 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      # The per-client source map: which platforms each client runs and how to
+      # reach each one. Deployment input, read-only, and carries no
+      # credentials — those are in tenant_integrations, encrypted.
+      - ./config:/config:ro
       - artifacts:/app/artifacts
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
+      # The internal CA that signed the CAPE reverse proxy's certificate.
+      # Read-only, and a single file rather than the whole secrets/ directory
+      # so these containers can see the trust anchor and nothing else that
+      # may later be put alongside it. The public certificate only — the CAPE
+      # token is not here, it arrives through env_file.
+      #
+      # The file must exist on the host BEFORE these containers are created:
+      # Docker silently creates a directory at a missing bind source, and a
+      # directory named cape-internal-ca.crt then blocks the real file.
+      - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
+      # The whole directory, read-only, for certificates added later. A bind
+      # to a *file* that does not exist yet makes Docker create a directory in
+      # its place, which then blocks the real file; the directory itself always
+      # exists, so a cert dropped into secrets/ is simply there next time.
+      - ./secrets:/run/secrets/tip:ro
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+
+  # ── Celery Beat (scheduler) ──
+  beat:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Three connections, three privilege levels — scripts/db_roles.sql and
+      # the README's "Database connections". The role names are here because
+      # they are not secret and seeing which role a service holds is the
+      # point; the passwords come from .env, which is gitignored.
+      DATABASE_URL: postgresql+asyncpg://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SANITIZER_URL: postgresql://tip_sanitizer:${TIP_SANITIZER_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      # Alembic only. Never held by a serving process.
+      DATABASE_MIGRATION_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      # The per-client source map: which platforms each client runs and how to
+      # reach each one. Deployment input, read-only, and carries no
+      # credentials — those are in tenant_integrations, encrypted.
+      - ./config:/config:ro
+      # The internal CA that signed the CAPE reverse proxy's certificate.
+      # Read-only, and a single file rather than the whole secrets/ directory
+      # so these containers can see the trust anchor and nothing else that
+      # may later be put alongside it. The public certificate only — the CAPE
+      # token is not here, it arrives through env_file.
+      #
+      # The file must exist on the host BEFORE these containers are created:
+      # Docker silently creates a directory at a missing bind source, and a
+      # directory named cape-internal-ca.crt then blocks the real file.
+      - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
+      # The whole directory, read-only, for certificates added later. A bind
+      # to a *file* that does not exist yet makes Docker create a directory in
+      # its place, which then blocks the real file; the directory itself always
+      # exists, so a cert dropped into secrets/ is simply there next time.
+      - ./secrets:/run/secrets/tip:ro
+    command: celery -A app.tasks.celery_app beat --loglevel=info
 
   # ── Frontend ──
   frontend:
     build:
       context: ./frontend
       dockerfile: ../docker/Dockerfile.frontend
+      args:
+        API_PROXY_TARGET: http://api:8000
+    restart: unless-stopped
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    command: npm run dev
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

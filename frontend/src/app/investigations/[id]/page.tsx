@@ -1,49 +1,297 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import ProgressTimeline from "@/components/investigation/ProgressTimeline";
-import EnrichmentPanel from "@/components/investigation/EnrichmentPanel";
+import CollectorTimingTable from "@/components/investigation/CollectorTimingTable";
+import AnalystFeedbackControl from "@/components/shared/AnalystFeedbackControl";
 import Spinner from "@/components/shared/Spinner";
 import TabBar from "@/components/shared/TabBar";
+import ConsoleModule from "@/components/ui/ConsoleModule";
+import MetadataGrid, { type MetadataItem } from "@/components/ui/MetadataGrid";
+import PageHero from "@/components/ui/PageHero";
+import { Details, MenuItem, OverflowMenu } from "@/components/ui/Primitives";
+import SignalCard from "@/components/ui/SignalCard";
+import StatusPill from "@/components/ui/StatusPill";
 
-import ExecutiveSummaryTab from "@/components/report/ExecutiveSummaryTab";
 import TechnicalEvidenceTab from "@/components/report/TechnicalEvidenceTab";
 import FindingsTab from "@/components/report/FindingsTab";
 import IndicatorsTab from "@/components/report/IndicatorsTab";
 import SignalsTab from "@/components/report/SignalsTab";
+import InfrastructureTab from "@/components/report/InfrastructureTab";
+import AnyRunProcessGraphTab from "@/components/report/AnyRunProcessGraphTab";
+import SocIntelligenceTab from "@/components/report/SocIntelligenceTab";
+import AICaseStoryTab from "@/components/report/AICaseStoryTab";
 
 import * as api from "@/lib/api";
+import { useSSE } from "@/hooks/useSSE";
+import { CollectorStatus } from "@/lib/types";
+import completionRefresh from "./completionRefresh";
+import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 
-const TABS = [
-  { id: "summary", label: "EXECUTIVE SUMMARY" },
-  { id: "evidence", label: "TECHNICAL EVIDENCE" },
-  { id: "findings", label: "FINDINGS" },
-  { id: "indicators", label: "INDICATORS & PIVOTS" },
-  { id: "signals", label: "SIGNALS & GAPS" },
-  { id: "raw", label: "RAW JSON" },
+const { shouldTriggerDomainCompletionRefresh } = completionRefresh;
+
+// Full tab set for domain / URL investigations (Claude analysis available)
+const DOMAIN_TABS = [
+  { id: "case_story", label: "AI Case Story" },
+  { id: "intelligence", label: "SOC Intelligence" },
+  { id: "evidence", label: "Technical Evidence" },
+  { id: "findings", label: "Findings" },
+  { id: "indicators", label: "Indicators & Pivots" },
+  { id: "signals", label: "Signals & Gaps" },
+  { id: "infrastructure", label: "Infrastructure" },
+  { id: "anyrun", label: "AnyRun" },
+  { id: "raw", label: "Raw JSON" },
 ] as const;
 
-type TabId = (typeof TABS)[number]["id"];
+// Minimal tab set for fast-path types (hash / ip / file)
+// No AI-generated narrative - just technical evidence and IOCs.
+const FAST_PATH_TABS = [
+  { id: "case_story", label: "AI Case Story" },
+  { id: "intelligence", label: "SOC Intelligence" },
+  { id: "evidence", label: "Technical Evidence" },
+  { id: "indicators", label: "Indicators & Pivots" },
+] as const;
+
+const FAST_PATH_TYPES = new Set(["hash", "ip", "file"]);
+const DEFAULT_COLLECTOR_ORDER = [
+  "dns",
+  "tls",
+  "http",
+  "whois",
+  "asn",
+  "intel",
+  "vt",
+  "brave_osint",
+  "threat_feeds",
+  "hybrid_analysis",
+  "urlscan",
+  "screenshot",
+  "js_analysis",
+  "opencti",
+] as const;
+
+type TabId = "case_story" | "intelligence" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "anyrun" | "raw";
+
+const pageShellStyle: React.CSSProperties = {
+  paddingTop: 24,
+  paddingBottom: 80,
+  display: "grid",
+  gap: 18,
+};
+
+const progressTrackStyle: React.CSSProperties = {
+  height: 12,
+  background: "var(--bg-elevated)",
+  borderRadius: 999,
+  overflow: "hidden",
+  border: "1px solid var(--panel-divider-strong)",
+};
+
+function shortId(value: string) {
+  if (!value) return "-";
+  return value.length > 12 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
+}
+
+function humanizeState(state: string) {
+  return String(state || "unknown")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function resolveStateTone(state: string, report: any): "neutral" | "info" | "success" | "warning" | "danger" {
+  const normalized = String(state || "").toLowerCase();
+  if (normalized === "failed" || normalized === "error") return "danger";
+  if (normalized === "cancelled" || normalized === "canceled") return "neutral";
+  if (normalized === "concluded") return report ? "success" : "info";
+  if (normalized === "evaluating") return "warning";
+  if (normalized === "gathering") return "info";
+  return "neutral";
+}
+
+function stateAccent(state: string) {
+  const normalized = String(state || "").toLowerCase();
+  if (normalized === "failed" || normalized === "error") return "#f07050";
+  if (normalized === "concluded") return "#2ecc71";
+  if (normalized === "evaluating") return "#f0a050";
+  if (normalized === "gathering") return "#4f6ef7";
+  return "#7891b2";
+}
+
+function getInvestigationProgressPct(state: string, ssePercent: number, reportReady: boolean) {
+  if (reportReady || state === "concluded") return 100;
+  const fallbackPercent =
+    state === "created" ? 2 :
+    state === "gathering" ? 25 :
+    state === "evaluating" ? 75 :
+    state === "failed" ? 100 :
+    0;
+  return Math.max(ssePercent || 0, fallbackPercent);
+}
+
+function actionButtonPalette(tone: "neutral" | "info" | "success" | "warning" | "danger") {
+  switch (tone) {
+    case "danger":
+      return {
+        foreground: "#f5a48f",
+        background: "rgba(240, 112, 80, 0.12)",
+        border: "rgba(240, 112, 80, 0.28)",
+        hoverBackground: "rgba(240, 112, 80, 0.18)",
+        hoverBorder: "rgba(240, 112, 80, 0.42)",
+      };
+    case "success":
+      return {
+        foreground: "#8fe3ae",
+        background: "rgba(46, 204, 113, 0.10)",
+        border: "rgba(46, 204, 113, 0.26)",
+        hoverBackground: "rgba(46, 204, 113, 0.16)",
+        hoverBorder: "rgba(46, 204, 113, 0.40)",
+      };
+    case "warning":
+      return {
+        foreground: "#f7c48d",
+        background: "rgba(240, 160, 80, 0.10)",
+        border: "rgba(240, 160, 80, 0.26)",
+        hoverBackground: "rgba(240, 160, 80, 0.16)",
+        hoverBorder: "rgba(240, 160, 80, 0.40)",
+      };
+    case "info":
+      return {
+        foreground: "#bfdbfe",
+        background: "rgba(79, 110, 247, 0.10)",
+        border: "rgba(79, 110, 247, 0.26)",
+        hoverBackground: "rgba(79, 110, 247, 0.16)",
+        hoverBorder: "rgba(79, 110, 247, 0.40)",
+      };
+    case "neutral":
+    default:
+      return {
+        foreground: "var(--text-secondary)",
+        background: "rgba(126, 134, 170, 0.08)",
+        border: "rgba(126, 134, 170, 0.22)",
+        hoverBackground: "rgba(126, 134, 170, 0.12)",
+        hoverBorder: "rgba(126, 134, 170, 0.34)",
+      };
+  }
+}
 
 export default function InvestigationPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { settings } = useSettingsPreferences();
   const investigationId = params?.id as string;
 
   const [detail, setDetail] = useState<any>(null);
   const [evidence, setEvidence] = useState<any>(null);
   const [report, setReport] = useState<any>(null);
+  const [intelligence, setIntelligence] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabId>("summary");
+  const observableType = detail?.observable_type || "domain";
+  const isFastPath = FAST_PATH_TYPES.has(observableType);
+  const tabs = isFastPath ? FAST_PATH_TABS : DOMAIN_TABS;
+  const defaultTab: TabId = "case_story";
+  const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
+  const [reportTabsNode, setReportTabsNode] = useState<HTMLDivElement | null>(null);
+  const [showFloatingTabNav, setShowFloatingTabNav] = useState(false);
   const [tabError, setTabError] = useState<string | null>(null);
+  const [canceling, setCanceling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [nowTs, setNowTs] = useState(Date.now());
+  const completionRefreshInFlight = React.useRef(false);
+  const sse = useSSE(investigationId || null);
+  const collectorKeys = React.useMemo(() => {
+    const keys = new Set<string>(DEFAULT_COLLECTOR_ORDER as unknown as string[]);
+    Object.keys((detail?.collector_statuses || {}) as Record<string, string>).forEach((k) => keys.add(k));
+    Object.keys((sse?.collectors || {}) as Record<string, string>).forEach((k) => keys.add(k));
+    if (evidence && typeof evidence === "object") {
+      if (evidence.dns?.meta) keys.add("dns");
+      if (evidence.tls?.meta) keys.add("tls");
+      if (evidence.http?.meta) keys.add("http");
+      if (evidence.whois?.meta) keys.add("whois");
+      if (evidence.hosting?.meta) keys.add("asn");
+      if (evidence.intel?.meta) keys.add("intel");
+      if (evidence.vt?.meta) keys.add("vt");
+      if (evidence.brave_osint?.meta) keys.add("brave_osint");
+      if (evidence.threat_feeds?.meta) keys.add("threat_feeds");
+      if (evidence.hybrid_analysis?.meta) keys.add("hybrid_analysis");
+      if (evidence.urlscan?.meta) keys.add("urlscan");
+      if (evidence.opencti?.meta) keys.add("opencti");
+    }
+    const known = [...DEFAULT_COLLECTOR_ORDER].filter((k) => keys.has(k));
+    const extra = Array.from(keys).filter((k) => !DEFAULT_COLLECTOR_ORDER.includes(k as any)).sort();
+    return [...known, ...extra];
+  }, [detail?.collector_statuses, sse?.collectors, evidence]);
+
+  // One collector's status, by the same precedence the rows below use. The
+  // sandbox panel needs it to tell "never ran" from "still running": ANY.RUN
+  // exceeds its 90-second soft deadline on every real detonation and finishes
+  // in the background, so the report is written before its result exists.
+  const collectorStatus = (c: string): string => {
+    const evidenceKey = c === "asn" ? "hosting" : c;
+    return String(
+      sse.collectors[c]
+        || detail?.collector_statuses?.[c]
+        || evidence?.[evidenceKey]?.meta?.status
+        || "pending",
+    );
+  };
+
+  const collectorRows = collectorKeys.map((c) => {
+    const evidenceKey = c === "asn" ? "hosting" : c;
+    const evidenceMeta = evidence?.[evidenceKey]?.meta || {};
+    const status = (
+      sse.collectors[c]
+      || detail?.collector_statuses?.[c]
+      || evidenceMeta.status
+      || "pending"
+    ) as CollectorStatus;
+    const durationMs = sse.collectorDurations[c] ?? evidenceMeta.duration_ms;
+    return { collector: c, status, durationMs };
+  });
+  const isCancellable = ["created", "gathering", "evaluating"].includes(String(detail?.state || "").toLowerCase());
+  const investigationTitle = detail?.domain || evidence?.domain || investigationId;
+  const investigationState = String(sse.state || detail?.state || "created");
+  const investigationStatusTone = resolveStateTone(investigationState, report);
+  const reportReady = Boolean(report);
+  const reportFreshness = report?.report_freshness || null;
+  const reportWasRecomputed = Boolean(reportFreshness?.recomputed || sse.reportRecomputed);
+  const collectorCompleteCount = collectorRows.filter((row) => String(row.status) === "completed").length;
+  const collectorFailedCount = collectorRows.filter((row) => String(row.status) === "failed").length;
+  const collectorPendingCount = Math.max(0, collectorRows.length - collectorCompleteCount - collectorFailedCount);
+  const collectorCoverage = collectorRows.length
+    ? Math.round((collectorCompleteCount / collectorRows.length) * 100)
+    : 0;
+  const currentProgressPct = getInvestigationProgressPct(investigationState, sse.percent || 0, reportReady);
+  const stageSummary = sse.message || `Investigation in progress (${investigationState})`;
+  const elapsedSec = detail?.created_at
+    ? Math.max(0, Math.floor((nowTs - new Date(detail.created_at).getTime()) / 1000))
+    : 0;
+  const createdLabel = detail?.created_at ? new Date(detail.created_at).toLocaleString() : "-";
+  const concludedLabel = detail?.concluded_at ? new Date(detail.concluded_at).toLocaleString() : "-";
+  const investigationMetaItems: MetadataItem[] = [
+    { label: "Investigation ID", value: shortId(investigationId), hint: "Stable reference for exports and links", mono: true },
+    { label: "Observable", value: investigationTitle, hint: "Primary indicator under analysis", mono: true, span: 2 },
+    { label: "Observable Type", value: detail?.observable_type || "domain" },
+    { label: "State", value: humanizeState(investigationState) },
+    { label: "Created", value: createdLabel, hint: elapsedSec ? `${elapsedSec}s elapsed` : "Awaiting start" },
+    { label: "Completed", value: concludedLabel, hint: reportReady ? "Report ready" : "Still collecting" },
+    { label: "Collector Coverage", value: `${collectorCoverage}%`, hint: `${collectorCompleteCount} completed / ${collectorPendingCount} pending`, tone: reportReady ? "success" : "info" },
+    { label: "SSE", value: sse.connected ? "Live" : "Polling", hint: sse.connected ? "Streaming updates" : "Fallback refresh mode", tone: sse.connected ? "success" : "warning" },
+    { label: "Report Freshness", value: reportWasRecomputed ? "Recomputed" : reportReady ? "Fresh" : "Pending", hint: reportFreshness?.reason || "Current report state", tone: reportWasRecomputed ? "info" : reportReady ? "success" : "warning" },
+  ];
 
   // Fetch all data
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (options?: { silent?: boolean }) => {
     if (!investigationId) return;
-    setLoading(true);
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -56,65 +304,429 @@ export default function InvestigationPage() {
       const rep = await api.getReport(investigationId).catch(() => null);
       setReport(rep);
 
-      setLoading(false);
+      const intel = await api.getInvestigationIntelligence(investigationId).catch(() => null);
+      setIntelligence(intel);
+
+      if (!silent) {
+        setLoading(false);
+      }
+      return { detail: det, evidence: ev, report: rep, intelligence: intel };
     } catch (e: any) {
       setError(e?.message || "Failed to load");
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
+      return null;
     }
   }, [investigationId]);
 
   useEffect(() => {
     fetchData();
-    // Poll every 5s if not concluded
+    if (!settings.investigationAutoRefresh) {
+      return;
+    }
+    // Poll every 5s only when SSE is disconnected (fallback mode).
     const interval = setInterval(() => {
+      if (sse.connected) return;
       if (detail?.state === "concluded" || detail?.state === "failed") return;
       fetchData();
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchData, detail?.state]);
+  }, [fetchData, detail?.state, settings.investigationAutoRefresh, sse.connected]);
+
+  useEffect(() => {
+    if (!settings.investigationAutoRefresh) {
+      return;
+    }
+    if (!shouldTriggerDomainCompletionRefresh({
+      observableType: detail?.observable_type,
+      reportReady,
+      liveState: sse.state || detail?.state,
+      ssePercent: sse.percent || 0,
+      sseDone: sse.done,
+      refreshInFlight: completionRefreshInFlight.current,
+    })) {
+      return;
+    }
+
+    let cancelled = false;
+    completionRefreshInFlight.current = true;
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    (async () => {
+      try {
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const refreshed = await fetchData({ silent: true });
+          if (cancelled || refreshed?.report) {
+            break;
+          }
+          await sleep(1000);
+        }
+      } finally {
+        completionRefreshInFlight.current = false;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    detail?.observable_type,
+    detail?.state,
+    fetchData,
+    reportReady,
+    settings.investigationAutoRefresh,
+    sse.done,
+    sse.percent,
+    sse.state,
+  ]);
+
+  useEffect(() => {
+    if (!sse.evidenceUpdateSeq) return;
+    void fetchData({ silent: true });
+  }, [fetchData, sse.evidenceUpdateSeq]);
+
+  // Reset activeTab when observable type loads and the current tab isn't in the tab set
+  useEffect(() => {
+    const validIds = tabs.map((t) => t.id);
+    if (!validIds.includes(activeTab as any)) {
+      setActiveTab(tabs[0].id as TabId);
+    }
+  }, [isFastPath]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clear tab error when switching tabs
   useEffect(() => {
     setTabError(null);
   }, [activeTab]);
 
-  const handleEnrich = useCallback(async (text: string) => {
-    try {
-      const data = JSON.parse(text);
-      await api.enrichInvestigation(investigationId, data);
-    } catch {
-      await api.enrichInvestigation(investigationId, { soc_ticket_notes: text }).catch(() => {});
+  useEffect(() => {
+    if (!reportTabsNode) {
+      setShowFloatingTabNav(false);
+      return;
     }
-  }, [investigationId]);
+    const updateVisibility = () => {
+      setShowFloatingTabNav(reportTabsNode.getBoundingClientRect().bottom <= 72);
+    };
+    updateVisibility();
+    window.addEventListener("scroll", updateVisibility, { passive: true });
+    window.addEventListener("resize", updateVisibility);
+    return () => {
+      window.removeEventListener("scroll", updateVisibility);
+      window.removeEventListener("resize", updateVisibility);
+    };
+  }, [reportTabsNode]);
+
+  const changeTabFromFloatingNav = useCallback((id: string) => {
+    setActiveTab(id as TabId);
+    window.requestAnimationFrame(() => {
+      if (!reportTabsNode) return;
+      const top = reportTabsNode.getBoundingClientRect().top + window.scrollY - 76;
+      window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+    });
+  }, [reportTabsNode]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const qTab = String(searchParams?.get("tab") || "").trim();
+    if (!qTab) return;
+    const validIds = tabs.map((t) => t.id);
+    if (validIds.includes(qTab as any)) {
+      setActiveTab(qTab as TabId);
+    }
+  }, [searchParams, tabs]);
+
+  const handleRefresh = useCallback(() => {
+    void fetchData();
+  }, [fetchData]);
+
+  const handleCancel = useCallback(async () => {
+    if (!investigationId || canceling || !isCancellable) return;
+    setCancelError(null);
+    setCanceling(true);
+    try {
+      await api.cancelInvestigation(investigationId);
+      await fetchData();
+    } catch (e: any) {
+      setCancelError(e?.message || "Failed to cancel investigation");
+    } finally {
+      setCanceling(false);
+    }
+  }, [investigationId, canceling, isCancellable, fetchData]);
+
+  const handleDelete = useCallback(async () => {
+    if (!investigationId || deleting) return;
+    const label = detail?.domain || investigationId;
+    if (!window.confirm(`Delete ${label}? This removes the investigation, evidence, reports, and related artifacts.`)) {
+      return;
+    }
+    setCancelError(null);
+    setDeleting(true);
+    try {
+      await api.deleteInvestigation(investigationId);
+      router.push("/investigations");
+    } catch (e: any) {
+      setCancelError(e?.message || "Failed to delete investigation");
+      setDeleting(false);
+    }
+  }, [investigationId, deleting, detail?.domain, router]);
+
+  const handleOpenAssistant = useCallback(async () => {
+    if (!investigationId) return;
+    try {
+      const linked = await api.createAssistantSessionFromInvestigation(investigationId);
+      router.push(`/assistant?session=${linked.id}`);
+    } catch (e: any) {
+      setCancelError(e?.message || "Failed to open AI Assistant");
+    }
+  }, [investigationId, router]);
 
   // ─── Loading state ───
   if (loading && !evidence && !report) {
-    return <Spinner message="Loading investigation..." />;
+    return (
+      <div style={pageShellStyle}>
+        <PageHero
+          title={investigationTitle}
+          status={<StatusPill tone="neutral" mono>Loading</StatusPill>}
+          badges={(
+            <>
+              <StatusPill tone="info" size="sm" outline mono>{humanizeState(investigationState)}</StatusPill>
+              <StatusPill tone={sse.connected ? "success" : "warning"} size="sm" outline mono>
+                {sse.connected ? "SSE LIVE" : "POLLING"}
+              </StatusPill>
+            </>
+          )}
+          stats={(
+            <>
+              <SignalCard label="Progress" value={`${currentProgressPct}%`} caption="Preparing the investigation view" tone="info" compact />
+              <SignalCard label="Collectors" value={collectorRows.length} caption="Configured collector channels" tone="neutral" compact />
+              <SignalCard label="Report" value={reportReady ? "Ready" : "Pending"} caption="Narrative layer and exports" tone={reportReady ? "success" : "warning"} compact />
+              <SignalCard label="Elapsed" value={`${elapsedSec}s`} caption="Time since submission" tone="neutral" compact />
+            </>
+          )}
+        />
+        <div style={{ marginTop: 22 }}>
+          <ConsoleModule title="Loading investigation">
+            <div style={{ display: "grid", gap: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                <Spinner message="Loading investigation..." />
+                <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.7 }}>
+                  Establishing live state, collector coverage, and report context.
+                </div>
+              </div>
+              <MetadataGrid items={investigationMetaItems} compact />
+            </div>
+          </ConsoleModule>
+        </div>
+      </div>
+    );
   }
 
   // ─── Waiting for results ───
-  if (!report && detail?.state !== "concluded" && detail?.state !== "failed") {
+  if (!report && detail?.state !== "concluded" && detail?.state !== "failed" && detail?.state !== "cancelled") {
+    const liveState = sse.state || detail?.state || "created";
+    const fallbackPercent =
+      liveState === "created" ? 2 :
+      liveState === "gathering" ? 25 :
+      liveState === "evaluating" ? 75 :
+      liveState === "concluded" ? 100 :
+      liveState === "failed" ? 100 : 0;
+    const progressPct = Math.max(sse.percent || 0, fallbackPercent);
+    const stageText = sse.message || `Investigation in progress (${liveState})`;
+    const elapsedSec = detail?.created_at
+      ? Math.max(0, Math.floor((nowTs - new Date(detail.created_at).getTime()) / 1000))
+      : 0;
+    const steps = [
+      { key: "queued", label: "Queued", done: true, active: liveState === "created" },
+      { key: "collectors", label: "Collectors Running", done: ["evaluating", "concluded", "failed"].includes(liveState), active: liveState === "gathering" },
+      { key: "correlation", label: "Evidence Correlation", done: ["concluded", "failed"].includes(liveState), active: liveState === "evaluating" },
+      { key: "analyst", label: "Analyst Decision", done: ["concluded", "failed"].includes(liveState), active: liveState === "evaluating" && /analyst/i.test(stageText) },
+      { key: "complete", label: "Completed", done: ["concluded", "failed"].includes(liveState), active: ["concluded", "failed"].includes(liveState) },
+    ];
+
     return (
-      <div style={{ paddingTop: 24 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)", marginBottom: 8 }}>
-          {detail?.domain || investigationId}
+      <div style={pageShellStyle}>
+        {/* A running investigation used to state its own progress six times:
+            in the header sentence, a status pill, two badges, four stat cards,
+            a progress module and the stage list. Progress belongs in one
+            place, and what the analyst is waiting for is the stage. */}
+        <PageHero
+          title={investigationTitle}
+          description={`${humanizeState(investigationState)} · ${currentProgressPct}% · ${collectorCompleteCount} of ${collectorRows.length} collectors done · ${elapsedSec}s elapsed`}
+          status={<StatusPill tone={investigationStatusTone} mono>{humanizeState(investigationState)}</StatusPill>}
+          actions={(
+            <>
+              <ConsoleActionButton onClick={handleRefresh}>Refresh</ConsoleActionButton>
+              {isCancellable ? (
+                <ConsoleActionButton onClick={handleCancel} tone="danger" disabled={canceling}>
+                  {canceling ? "Cancelling..." : "Cancel investigation"}
+                </ConsoleActionButton>
+              ) : null}
+            </>
+          )}
+        />
+        <div style={consoleSectionSpacing}>
+          <ConsoleModule title="Progress" tone={investigationStatusTone} variant="glass">
+            <div style={{ display: "grid", gap: "var(--space-3)" }}>
+              <div
+                style={progressTrackStyle}
+                role="progressbar"
+                aria-valuenow={progressPct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Investigation progress"
+              >
+                <div
+                  style={{
+                    ...progressBarStyle,
+                    width: `${progressPct}%`,
+                    background: liveState === "failed"
+                      ? "var(--status-danger)"
+                      : "linear-gradient(90deg, var(--accent), var(--status-success))",
+                  }}
+                />
+              </div>
+              <div style={consoleBodyStyle}>{stageText}</div>
+              <div style={{ display: "grid", gap: "var(--space-2)" }}>
+                {steps.map((step) => (
+                  <div key={step.key} style={stageRowStyle(step.active, step.done)}>
+                    <span style={stageIconStyle(step.active, step.done)}>{step.done ? "Done" : step.active ? "Running" : "Pending"}</span>
+                    <span style={{ fontSize: "var(--font-meta)", fontWeight: 600 }}>{step.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </ConsoleModule>
+
+          {/* Connection state, per-collector timings and the metadata snapshot
+              are diagnostics — available, not in the way of the wait. */}
+          <Details summary="Technical details">
+            <MetadataGrid items={investigationMetaItems} compact />
+            <div style={{ marginTop: "var(--space-3)", fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+              Updates: {sse.connected ? "live stream" : "polling (stream reconnecting)"}
+            </div>
+            <CollectorTimingTable
+              rows={collectorRows}
+              totalDurationMs={sse.totalElapsedMs ?? (elapsedSec * 1000)}
+              live={true}
+              title="Collector timings"
+            />
+          </Details>
+          {cancelError ? <div style={inlineErrorStyle}>{cancelError}</div> : null}
         </div>
-        <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 20 }}>
-          State: {detail?.state || "loading..."}
+        {false && <div style={{ paddingTop: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 20, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+            {detail?.domain || investigationId}
+          </span>
+          {detail?.observable_type && detail.observable_type !== "domain" && (
+            <span style={{
+              fontSize: 10, fontWeight: 700,
+              padding: "3px 8px",
+              background: "rgba(143,164,255,0.12)",
+              color: "#8fa4ff",
+              border: "1px solid rgba(143,164,255,0.25)",
+              borderRadius: 4,
+              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.05em",
+              textTransform: "uppercase" as const,
+            }}>
+              {detail.observable_type}
+            </span>
+          )}
         </div>
-        <Spinner message={`Investigation in progress — ${detail?.state || "gathering"}...`} />
+        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 20, fontFamily: "var(--font-sans)" }}>
+          State: {liveState} | Elapsed: {elapsedSec}s | SSE: {sse.connected ? "live" : "reconnecting"}
+        </div>
+        <div style={{
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          background: "var(--bg-card)",
+          padding: 16,
+          marginBottom: 14,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>Progress</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{progressPct}%</span>
+          </div>
+          <div style={{ height: 10, background: "var(--bg-input)", borderRadius: 999, overflow: "hidden", border: "1px solid var(--border)" }}>
+            <div style={{
+              height: "100%",
+              width: `${progressPct}%`,
+              background: liveState === "failed"
+                ? "linear-gradient(90deg, #f07050, #f07050)"
+                : "linear-gradient(90deg, var(--accent), #2ecc71)",
+              transition: "width 400ms ease",
+            }} />
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "var(--text)" }}>{stageText}</div>
+        </div>
+        <div style={{
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          background: "var(--bg-card)",
+          padding: 12,
+          marginBottom: 14,
+        }}>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, marginBottom: 8 }}>
+            Investigation Stages
+          </div>
+          <div style={{ display: "grid", gap: 6 }}>
+            {steps.map((step) => (
+              <div key={step.key} style={{ fontSize: 12, color: step.active ? "var(--accent)" : step.done ? "var(--green)" : "var(--text-muted)" }}>
+                {step.done ? "✓" : step.active ? "●" : "○"} {step.label}
+              </div>
+            ))}
+          </div>
+        </div>
+        <CollectorTimingTable
+          rows={collectorRows}
+          totalDurationMs={sse.totalElapsedMs ?? (elapsedSec * 1000)}
+          live={true}
+          title="Collector Timings"
+        />
         <div style={{ textAlign: "center", marginTop: 16 }}>
+          {cancelError && (
+            <div style={{ color: "#f07050", fontSize: 12, marginBottom: 8 }}>{cancelError}</div>
+          )}
           <button
-            onClick={fetchData}
+            onClick={handleRefresh}
             style={{
-              padding: "8px 20px", background: "var(--bg-elevated)", border: "none",
+              padding: "8px 20px", background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
               borderRadius: "var(--radius-sm)", color: "var(--text-secondary)",
-              fontSize: 11, cursor: "pointer", fontFamily: "var(--font-mono)",
+              fontSize: 12, cursor: "pointer", fontFamily: "var(--font-sans)",
+              fontWeight: 500,
             }}
           >
-            REFRESH
+            Refresh
           </button>
+          {isCancellable && (
+            <button
+              onClick={handleCancel}
+              disabled={canceling}
+              style={{
+                marginLeft: 10,
+                padding: "8px 20px",
+                background: "rgba(240,112,80,0.12)",
+                border: "1px solid rgba(240,112,80,0.35)",
+                borderRadius: "var(--radius-sm)",
+                color: "#f5a48f",
+                fontSize: 12,
+                cursor: canceling ? "not-allowed" : "pointer",
+                fontFamily: "var(--font-sans)",
+                fontWeight: 600,
+              }}
+            >
+              {canceling ? "Cancelling..." : "Cancel Investigation"}
+            </button>
+          )}
         </div>
+        </div>}
       </div>
     );
   }
@@ -123,26 +735,32 @@ export default function InvestigationPage() {
   function renderTab() {
     try {
       switch (activeTab) {
-        case "summary":
-          return report ? <ExecutiveSummaryTab report={report} /> : <NoData label="report" />;
+        case "case_story":
+          return report ? <AICaseStoryTab investigationId={investigationId} initialStory={report?.ai_case_story} /> : <NoData label="completed report" />;
+        case "intelligence":
+          return <SocIntelligenceTab intelligence={intelligence} report={report} evidence={evidence} detail={detail} loading={!intelligence && !evidence && !report} />;
         case "evidence":
-          return evidence ? <TechnicalEvidenceTab evidence={evidence} /> : <NoData label="evidence" />;
+          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} investigationId={investigationId} videoTaskId={detail?.sandbox_video_task_id} sandboxStatus={collectorStatus("hybrid_analysis")} onRefresh={() => fetchData({ silent: true })} /> : <NoData label="evidence" />;
         case "findings":
-          return report ? <FindingsTab report={report} /> : <NoData label="report" />;
+          return report ? <FindingsTab report={report} evidence={evidence} /> : <NoData label="report" />;
         case "indicators":
-          return report ? <IndicatorsTab report={report} /> : <NoData label="report" />;
+          return report ? <IndicatorsTab report={report} investigationId={investigationId} /> : <NoData label="report" />;
         case "signals":
           return evidence ? <SignalsTab evidence={evidence} /> : <NoData label="evidence" />;
+        case "infrastructure":
+          return <InfrastructureTab investigationId={investigationId} evidence={evidence} />;
+        case "anyrun":
+          return <AnyRunProcessGraphTab evidence={evidence || {}} />;
         case "raw":
-          return <RawJsonView evidence={evidence} report={report} detail={detail} />;
+          return <RawJsonView evidence={evidence} report={report} detail={detail} intelligence={intelligence} />;
         default:
           return null;
       }
     } catch (e: any) {
       return (
         <div style={{
-          padding: 24, background: "rgba(239,68,68,0.08)",
-          border: "1px solid rgba(239,68,68,0.2)", borderRadius: "var(--radius)",
+          padding: 24, background: "rgba(240,112,80,0.08)",
+          border: "1px solid rgba(240,112,80,0.2)", borderRadius: "var(--radius)",
         }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>
             Error rendering {activeTab} tab
@@ -174,34 +792,201 @@ export default function InvestigationPage() {
 
   // ─── Main report view ───
   return (
-    <div style={{ paddingTop: 24, paddingBottom: 80 }}>
+    <div style={pageShellStyle}>
+      {/* The entity, its verdict and what to do next. Model name, stream state,
+          run id and "report ready" moved into Technical details below — none of
+          them changes what the analyst does with the verdict. */}
+      <PageHero
+        title={investigationTitle}
+        description={concludedLabel ? `Completed ${concludedLabel}` : createdLabel}
+        status={<StatusPill tone={investigationStatusTone} mono>{humanizeState(investigationState)}</StatusPill>}
+        badges={(
+          <>
+            {detail?.observable_type && detail.observable_type !== "domain" ? (
+              <StatusPill tone="info" size="sm" outline mono>{detail.observable_type}</StatusPill>
+            ) : null}
+            {reportWasRecomputed ? (
+              <StatusPill tone="info" size="sm" outline mono>Recomputed</StatusPill>
+            ) : null}
+          </>
+        )}
+        actions={(
+          <>
+            {/* One primary action, one secondary, the rest behind an overflow.
+                Nine equally-weighted buttons made "Delete" as prominent as
+                "Refresh". */}
+            <ConsoleActionButton onClick={() => { void handleOpenAssistant(); }}>Open in AI Assistant</ConsoleActionButton>
+            <ConsoleActionButton onClick={handleRefresh}>Refresh</ConsoleActionButton>
+            <OverflowMenu label="More investigation actions">
+              {(close) => (
+                <>
+                  <MenuItem onClick={() => { close(); router.push("/"); }}>New investigation</MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      window.open("/api/investigations/" + investigationId + "/export/pdf", "_blank");
+                    }}
+                  >
+                    Export as PDF
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      window.open("/api/investigations/" + investigationId + "/export/markdown", "_blank");
+                    }}
+                  >
+                    Export as Markdown
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      const blob = new Blob([JSON.stringify({ evidence, report, detail }, null, 2)], { type: "application/json" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = (detail?.domain || "investigation") + "-full.json";
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                  >
+                    Export raw JSON
+                  </MenuItem>
+                  {isCancellable ? (
+                    <MenuItem danger disabled={canceling} onClick={() => { close(); handleCancel(); }}>
+                      {canceling ? "Cancelling…" : "Cancel investigation"}
+                    </MenuItem>
+                  ) : null}
+                  <MenuItem danger disabled={deleting} onClick={() => { close(); handleDelete(); }}>
+                    {deleting ? "Deleting…" : "Delete investigation"}
+                  </MenuItem>
+                </>
+              )}
+            </OverflowMenu>
+          </>
+        )}
+      />
+      <div style={consoleSectionSpacing}>
+        {cancelError ? <div style={inlineErrorStyle}>{cancelError}</div> : null}
+
+        {/* Evidence coverage stays visible — a report built on 9 of 14
+            collectors is a different thing from a complete one. Timings, ids,
+            model and stream state collapse. */}
+        {evidence ? (
+          <ConsoleModule
+            title={`Collector coverage — ${collectorCoverage}%`}
+            description={
+              collectorPendingCount > 0
+                ? `${collectorCompleteCount} of ${collectorRows.length} complete, ${collectorPendingCount} pending or failed`
+                : `All ${collectorRows.length} collectors completed`
+            }
+            tone={collectorCoverage >= 75 ? "success" : "warning"}
+            variant="glass"
+          >
+            <ProgressTimeline
+              collectors={Object.fromEntries(
+                collectorKeys.map((c) => {
+                  const evidenceKey = c === "asn" ? "hosting" : c;
+                  const collectorData = evidence?.[evidenceKey];
+                  const status = collectorData?.meta?.status || (collectorData ? "completed" : "pending");
+                  return [c, status];
+                })
+              )}
+              analystDone={!!report}
+            />
+
+            <Details summary="Technical details">
+              <MetadataGrid items={investigationMetaItems} compact />
+              <div style={{ marginTop: "var(--space-3)", fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+                Run {shortId(investigationId)}
+                {report?.ai_model ? ` · analysed by ${String(report.ai_model).replace(" (default)", "")}` : ""}
+                {` · updates via ${sse.connected ? "live stream" : "polling"}`}
+              </div>
+              <CollectorTimingTable
+                rows={collectorRows}
+                totalDurationMs={
+                  detail?.created_at && detail?.concluded_at
+                    ? Math.max(0, new Date(detail.concluded_at).getTime() - new Date(detail.created_at).getTime())
+                    : undefined
+                }
+                title="Collector timings"
+              />
+            </Details>
+          </ConsoleModule>
+        ) : null}
+
+        {/* The tab bar names its own sections; a heading and a sentence above it
+            explaining that tabs are tabs was pure interface-about-interface. */}
+        <ConsoleModule variant="glass">
+          <div ref={setReportTabsNode}>
+            <TabBar tabs={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
+          </div>
+          <ErrorBoundary key={activeTab} fallback={activeTab} onRaw={() => setActiveTab("raw")}>
+            {renderTab()}
+          </ErrorBoundary>
+        </ConsoleModule>
+      </div>
+      <FloatingTabNavigator
+        tabs={tabs}
+        active={activeTab}
+        visible={showFloatingTabNav}
+        onChange={changeTabFromFloatingNav}
+      />
+      {false && <div style={{ paddingTop: 24, paddingBottom: 80 }}>
       {/* Domain header */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8,
       }}>
         <div>
-          <div style={{
-            fontSize: 22, fontWeight: 800, color: "var(--text)",
-            letterSpacing: "0.02em", fontFamily: "var(--font-mono)",
-          }}>
-            {detail?.domain || evidence?.domain || investigationId}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{
+              fontSize: 24, fontWeight: 700, color: "var(--text)",
+              letterSpacing: "-0.01em", fontFamily: "var(--font-sans)",
+            }}>
+              {detail?.domain || evidence?.domain || investigationId}
+            </span>
+            {detail?.observable_type && detail.observable_type !== "domain" && (
+              <span style={{
+                fontSize: 10, fontWeight: 700,
+                padding: "3px 8px",
+                background: "rgba(143,164,255,0.12)",
+                color: "#8fa4ff",
+                border: "1px solid rgba(143,164,255,0.25)",
+                borderRadius: 4,
+                fontFamily: "var(--font-mono)",
+                letterSpacing: "0.05em",
+                textTransform: "uppercase" as const,
+              }}>
+                {detail.observable_type}
+              </span>
+            )}
           </div>
-          <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 4 }}>
+          <div style={{
+            fontSize: 12, color: "var(--text-muted)", marginTop: 4,
+            fontFamily: "var(--font-sans)",
+          }}>
             Investigation {String(investigationId).slice(0, 8)}...
-            {detail?.concluded_at && ` · Completed ${new Date(detail.concluded_at).toLocaleString()}`}
+            {detail?.concluded_at && ` | Completed ${new Date(detail.concluded_at).toLocaleString()}`}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <HeaderButton onClick={() => router.push("/")}>NEW INVESTIGATION</HeaderButton>
+          <HeaderButton onClick={() => router.push("/")}>New Investigation</HeaderButton>
+          <HeaderButton onClick={() => { void handleOpenAssistant(); }}>
+            Open in AI Assistant
+          </HeaderButton>
+          {isCancellable && (
+            <HeaderButton onClick={handleCancel}>
+              {canceling ? "Cancelling..." : "Cancel"}
+            </HeaderButton>
+          )}
           <HeaderButton onClick={() => {
             window.open(`/api/investigations/${investigationId}/export/pdf`, "_blank");
           }}>
-            EXPORT PDF
+            Export PDF
           </HeaderButton>
           <HeaderButton onClick={() => {
             window.open(`/api/investigations/${investigationId}/export/markdown`, "_blank");
           }}>
-            EXPORT MD
+            Export MD
           </HeaderButton>
           <HeaderButton onClick={() => {
             const blob = new Blob(
@@ -215,60 +1000,317 @@ export default function InvestigationPage() {
             a.click();
             URL.revokeObjectURL(url);
           }}>
-            EXPORT JSON
+            Export JSON
           </HeaderButton>
-          <HeaderButton onClick={fetchData}>REFRESH</HeaderButton>
+          <HeaderButton onClick={handleRefresh}>Refresh</HeaderButton>
         </div>
       </div>
+      {cancelError && (
+        <div style={{ color: "#f07050", fontSize: 12, marginBottom: 10 }}>{cancelError}</div>
+      )}
 
       {/* Collector progress */}
       {evidence && (
-        <ProgressTimeline
-          collectors={Object.fromEntries(
-            ["dns", "tls", "http", "whois", "asn", "intel", "vt"]
-              .map((c) => {
-                // Backend stores ASN evidence under "hosting" key
-                const evidenceKey = c === "asn" ? "hosting" : c;
-                const collectorData = evidence?.[evidenceKey];
-                const status = collectorData?.meta?.status || (collectorData ? "completed" : "pending");
-                return [c, status];
-              })
-          )}
-          analystDone={!!report}
-        />
+        <>
+          <ProgressTimeline
+            collectors={Object.fromEntries(
+              collectorKeys
+                .map((c) => {
+                  const evidenceKey = c === "asn" ? "hosting" : c;
+                  const collectorData = evidence?.[evidenceKey];
+                  const status = collectorData?.meta?.status || (collectorData ? "completed" : "pending");
+                  return [c, status];
+                })
+            )}
+            analystDone={!!report}
+          />
+          <CollectorTimingTable
+            rows={collectorRows}
+            totalDurationMs={
+              detail?.created_at && detail?.concluded_at
+                ? Math.max(0, new Date(detail.concluded_at).getTime() - new Date(detail.created_at).getTime())
+                : undefined
+            }
+            title="Collector Timings"
+          />
+        </>
       )}
 
-      {/* Enrichment */}
-      <EnrichmentPanel onSubmit={handleEnrich} />
+      {/* Only once there is a verdict to judge — measuring the decision engine
+          is impossible without the analyst's call on what it decided. */}
+      {detail?.state === "concluded" && (
+        <AnalystFeedbackControl subjectType="investigation" subjectId={investigationId} compact />
+      )}
 
       {/* Tabs */}
-      <TabBar tabs={TABS} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
+      <TabBar tabs={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
 
       {/* Tab content wrapped in ErrorBoundary */}
       <ErrorBoundary key={activeTab} fallback={activeTab} onRaw={() => setActiveTab("raw")}>
         {renderTab()}
       </ErrorBoundary>
+    </div>}
     </div>
   );
 }
 
 // ─── Helper Components ───
 
-function HeaderButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+function FloatingTabNavigator({
+  tabs,
+  active,
+  visible,
+  onChange,
+}: {
+  tabs: readonly { id: string; label: string }[];
+  active: string;
+  visible: boolean;
+  onChange: (id: string) => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === active));
+  const previous = activeIndex > 0 ? tabs[activeIndex - 1] : null;
+  const next = activeIndex < tabs.length - 1 ? tabs[activeIndex + 1] : null;
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <nav
+      aria-label="Floating report tab navigation"
+      aria-hidden={!visible}
+      style={{
+        position: "fixed",
+        zIndex: 80,
+        left: "50%",
+        bottom: 22,
+        transform: `translate(-50%, ${visible ? "0" : "18px"})`,
+        display: "grid",
+        gridTemplateColumns: "minmax(112px, 1fr) auto minmax(112px, 1fr)",
+        alignItems: "stretch",
+        width: "min(620px, calc(100vw - 28px))",
+        padding: 5,
+        border: "1px solid rgba(79,110,247,.34)",
+        borderRadius: 16,
+        background: "rgba(7,18,33,.9)",
+        boxShadow: "0 18px 48px rgba(0,0,0,.42), 0 0 24px rgba(55,125,210,.12)",
+        backdropFilter: "blur(16px)",
+        WebkitBackdropFilter: "blur(16px)",
+        opacity: visible ? 1 : 0,
+        pointerEvents: visible ? "auto" : "none",
+        transition: "opacity .18s ease, transform .18s ease",
+      }}
+    >
+      <FloatingTabButton
+        direction="previous"
+        tab={previous}
+        onClick={() => previous && onChange(previous.id)}
+      />
+      <div style={{
+        display: "grid",
+        placeContent: "center",
+        minWidth: 150,
+        padding: "7px 16px",
+        borderLeft: "1px solid rgba(126,134,170,.14)",
+        borderRight: "1px solid rgba(126,134,170,.14)",
+        textAlign: "center",
+      }}>
+        <span style={{ color: "var(--accent)", fontSize: 8, fontWeight: 800, letterSpacing: ".11em", textTransform: "uppercase" }}>
+          Current section
+        </span>
+        <strong style={{ marginTop: 3, color: "var(--text-strong)", fontSize: 11, whiteSpace: "nowrap" }}>
+          {tabs[activeIndex]?.label}
+        </strong>
+        <span style={{ marginTop: 2, color: "var(--text-muted)", fontSize: 8 }}>
+          {activeIndex + 1} of {tabs.length}
+        </span>
+      </div>
+      <FloatingTabButton
+        direction="next"
+        tab={next}
+        onClick={() => next && onChange(next.id)}
+      />
+    </nav>,
+    document.body,
+  );
+}
+
+function FloatingTabButton({
+  direction,
+  tab,
+  onClick,
+}: {
+  direction: "previous" | "next";
+  tab: { id: string; label: string } | null;
+  onClick: () => void;
+}) {
+  const isNext = direction === "next";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!tab}
+      aria-label={tab ? `${direction === "previous" ? "Previous" : "Next"} tab: ${tab.label}` : `No ${direction} tab`}
+      style={{
+        display: "flex",
+        flexDirection: isNext ? "row-reverse" : "row",
+        alignItems: "center",
+        justifyContent: isNext ? "flex-start" : "flex-start",
+        gap: 9,
+        minWidth: 0,
+        padding: "9px 12px",
+        border: 0,
+        borderRadius: 11,
+        background: "transparent",
+        color: tab ? "var(--text-secondary)" : "var(--text-muted)",
+        cursor: tab ? "pointer" : "default",
+        opacity: tab ? 1 : 0.35,
+        textAlign: isNext ? "right" : "left",
+      }}
+    >
+      <span aria-hidden="true" style={{ color: tab ? "var(--accent)" : "inherit", fontSize: 17, lineHeight: 1 }}>
+        {isNext ? "→" : "←"}
+      </span>
+      <span style={{ minWidth: 0, display: "grid" }}>
+        <small style={{ color: "var(--text-muted)", fontSize: 7, fontWeight: 750, letterSpacing: ".09em", textTransform: "uppercase" }}>
+          {direction}
+        </small>
+        <strong title={tab?.label} style={{ marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10 }}>
+          {tab?.label || "End"}
+        </strong>
+      </span>
+    </button>
+  );
+}
+
+function ConsoleActionButton({ onClick, children, tone = "neutral", disabled = false }: { onClick: () => void; children: React.ReactNode; tone?: "neutral" | "info" | "success" | "warning" | "danger"; disabled?: boolean }) {
+  const palette = actionButtonPalette(tone);
+
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
-        padding: "8px 16px", background: "var(--bg-elevated)", border: "none",
-        borderRadius: "var(--radius-sm)", color: "var(--text-secondary)",
-        fontSize: 10, fontWeight: 600, cursor: "pointer",
-        fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
+        padding: "8px 14px",
+        background: disabled ? "rgba(126, 134, 170, 0.08)" : palette.background,
+        border: `1px solid ${disabled ? "rgba(126, 134, 170, 0.12)" : palette.border}`,
+        borderRadius: 12,
+        color: disabled ? "var(--text-muted)" : palette.foreground,
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: disabled ? "not-allowed" : "pointer",
+        fontFamily: "var(--font-sans)",
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        boxShadow: disabled ? "none" : "0 12px 24px rgba(3, 8, 20, 0.16)",
+        transition: "transform 120ms ease, border-color 120ms ease, background 120ms ease, color 120ms ease",
+      }}
+      onMouseEnter={(e) => {
+        if (disabled) return;
+        e.currentTarget.style.transform = "translateY(-1px)";
+        e.currentTarget.style.background = palette.hoverBackground;
+        e.currentTarget.style.borderColor = palette.hoverBorder;
+      }}
+      onMouseLeave={(e) => {
+        if (disabled) return;
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.background = palette.background;
+        e.currentTarget.style.borderColor = palette.border;
       }}
     >
       {children}
     </button>
   );
 }
+
+function HeaderButton(props: { onClick: () => void; children: React.ReactNode }) {
+  return <ConsoleActionButton onClick={props.onClick}>{props.children}</ConsoleActionButton>;
+}
+
+const consoleSectionSpacing: React.CSSProperties = {
+  display: "grid",
+  gap: 18,
+};
+
+const consoleGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+  gap: 18,
+  alignItems: "start",
+};
+
+const consoleLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: "var(--text-dim)",
+};
+
+const consoleBodyStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.7,
+  color: "var(--text-secondary)",
+};
+
+const progressBarStyle: React.CSSProperties = {
+  height: "100%",
+  transition: "width 400ms ease",
+};
+
+function stageRowStyle(active: boolean, done: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    borderRadius: 14,
+    border: `1px solid ${
+      active
+        ? "rgba(79, 110, 247, 0.28)"
+        : done
+        ? "rgba(46, 204, 113, 0.24)"
+        : "rgba(126, 134, 170, 0.16)"
+    }`,
+    background: active
+      ? "rgba(79, 110, 247, 0.10)"
+      : done
+      ? "rgba(46, 204, 113, 0.08)"
+      : "var(--panel-empty-bg)",
+    color: active ? "#bfdbfe" : done ? "#8fe3ae" : "var(--text-secondary)",
+  };
+}
+
+function stageIconStyle(active: boolean, done: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 58,
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 800,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: active ? "#bfdbfe" : done ? "#8fe3ae" : "var(--text-dim)",
+    background: active
+      ? "rgba(79, 110, 247, 0.12)"
+      : done
+      ? "rgba(46, 204, 113, 0.12)"
+      : "rgba(126, 134, 170, 0.08)",
+  };
+}
+
+const inlineErrorStyle: React.CSSProperties = {
+  color: "#f5a48f",
+  fontSize: 12,
+  fontWeight: 600,
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(240, 112, 80, 0.24)",
+  background: "rgba(240, 112, 80, 0.10)",
+};
 
 function NoData({ label }: { label: string }) {
   return (
@@ -280,26 +1322,27 @@ function NoData({ label }: { label: string }) {
   );
 }
 
-function RawJsonView({ evidence, report, detail }: { evidence: any; report: any; detail: any }) {
-  const [view, setView] = useState<"evidence" | "report" | "detail">("evidence");
+function RawJsonView({ evidence, report, detail, intelligence }: { evidence: any; report: any; detail: any; intelligence?: any }) {
+  const [view, setView] = useState<"evidence" | "report" | "detail" | "intelligence">("evidence");
 
-  const data = view === "evidence" ? evidence : view === "report" ? report : detail;
+  const data = view === "evidence" ? evidence : view === "report" ? report : view === "intelligence" ? intelligence : detail;
 
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {(["evidence", "report", "detail"] as const).map((v) => (
+        {(["evidence", "report", "intelligence", "detail"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
             style={{
               padding: "6px 14px",
               background: view === v ? "var(--accent)" : "var(--bg-elevated)",
-              border: "none", borderRadius: "var(--radius-sm)",
+              border: view === v ? "1px solid var(--accent)" : "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
               color: view === v ? "#fff" : "var(--text-dim)",
-              fontSize: 10, fontWeight: 600, cursor: "pointer",
-              fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
-              textTransform: "uppercase",
+              fontSize: 11, fontWeight: 500, cursor: "pointer",
+              fontFamily: "var(--font-sans)",
+              textTransform: "capitalize",
             }}
           >
             {v}
@@ -346,10 +1389,10 @@ class ErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div style={{
-          padding: 24, background: "rgba(239,68,68,0.08)",
-          border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8,
+          padding: 24, background: "rgba(240,112,80,0.08)",
+          border: "1px solid rgba(240,112,80,0.2)", borderRadius: 8,
         }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#ef4444", marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#f07050", marginBottom: 8 }}>
             Error rendering &quot;{this.props.fallback}&quot; tab
           </div>
           <pre style={{

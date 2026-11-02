@@ -3,12 +3,35 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev && rm -rf /var/lib/apt/lists/*
+    gcc \
+    libpq-dev \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libpangoft2-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
+    # bsdtar, for reading the archives phishing actually uses. libarchive
+    # exports readers for rar, rar5, 7zip, cab, iso9660 and lha, which covers
+    # everything the stdlib does not — and it is free, where `unrar` is not.
+    libarchive-tools \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN playwright install chromium --with-deps
+
+# Install Playwright Chromium + required system deps for screenshot capture.
+RUN playwright install chromium --with-deps
 
 COPY . .
+
+# Patch anyrun-sdk: fix file upload bug where json=params is silently ignored by requests
+# when files= is also provided, causing task parameters to be dropped and the API to return
+# an empty response (SDK null payload error).
+RUN python scripts/patch_anyrun_sdk.py
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -58,10 +58,68 @@ class TestGenerateSignals:
         ids = [s.id for s in signals]
         assert "sig_blocklisted" in ids
 
+    def test_brave_osint_high_signal(self):
+        evidence = {
+            "brave_osint": {
+                "score": 82,
+                "top_hits": [
+                    {
+                        "title": "Adidas-samba.de phishing campaign",
+                        "url": "https://www.reddit.com/r/netsec/comments/example/adidas_samba_de_phishing/",
+                        "source": "reddit.com",
+                        "score": 88,
+                    }
+                ],
+            }
+        }
+        signals = generate_signals(evidence)
+        ids = [s.id for s in signals]
+        assert "sig_brave_osint_high" in ids
+
     def test_empty_evidence_no_crash(self):
         """Should not crash on completely empty evidence."""
         signals = generate_signals({})
         assert isinstance(signals, list)
+
+    def test_contextual_http_inputs_are_low_severity_signal(self):
+        evidence = {
+            "http": {
+                "phishing_indicators": [
+                    "Email-only input form observed",
+                    "Credential or account input fields observed (email/username/password/card)",
+                    "Third-party brand reference: 'microsoft' on non-microsoft domain",
+                ]
+            }
+        }
+
+        signals = generate_signals(evidence)
+        signal = next(s for s in signals if s.id == "sig_phishing_indicators")
+
+        assert signal.severity == "low"
+        assert "HTTP content observations" in signal.description
+
+    def test_anyrun_screenshot_sensitive_form_signal(self):
+        evidence = {
+            "hybrid_analysis": {
+                "items": [{
+                    "raw_summary": {
+                        "source": "anyrun",
+                        "sensitive_form_detection": {
+                            "detected": True,
+                            "categories": ["payment"],
+                        },
+                    },
+                }],
+            },
+        }
+
+        signals = generate_signals(evidence)
+        signal = next(s for s in signals if s.id == "sig_sensitive_data_entry_form")
+
+        assert signal.severity == "high"
+        assert signal.evidence_refs == [
+            "hybrid_analysis.items.0.raw_summary.sensitive_form_detection"
+        ]
 
 
 class TestDetectDataGaps:

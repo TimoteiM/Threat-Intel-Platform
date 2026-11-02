@@ -1,0 +1,1420 @@
+"""CrowdStrike Falcon, OAuth2 and one authenticated call.
+
+Scope of this module: get a token, know when it expires, ask Falcon a
+question about an observable, and report failure with the reason. It holds no
+credentials of its own — they arrive from `tenant_integrations`, sealed, and
+are opened by the caller.
+
+The token expiry is checked, not discovered
+-------------------------------------------
+Falcon's `/oauth2/token` returns `expires_in` (1800 seconds in current
+versions). That is **exactly the shape that killed the Spamhaus
+integration**: its stored SIA token was a JWT whose `exp` claim decoded to
+2026-05-12, the same day the integration was committed, and the collector
+then failed on 2,198 consecutive runs for 98 days. The expiry was in the
+token, in the database, readable, and nothing read it.
+
+So here the expiry is a value this module computes and exposes
+(`Token.expires_at`, `Token.expires_in_seconds`, `Token.expired`), refreshed
+before use with a safety margin rather than on the first 401. And it is
+reported to `credential_expiry_service` so there is **one** place that knows
+which credentials are near expiry — not a private timer per integration,
+which is how the first one became invisible.
+
+What is deliberately not here
+-----------------------------
+No detections polling. This pass is enrichment only: ingest needs
+`_create_alert_run` extracted from the API module first, and brings a field
+map (where unmapped Falcon fields are quarantined as `no_field_map` and never
+inferred) and the question of Falcon's MITRE attributions as a third
+technique namer that must not quietly join `rule_only`.
+
+Secrets
+-------
+The client secret reaches this module as an argument and goes into one
+request body. It is never logged, never interpolated into an exception, and
+never returned. `_redact()` is applied to every error string this module
+raises, because an HTTP library's own exception text can carry a request body.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, NamedTuple
+
+import requests
+
+#: Refresh this long before the token actually expires. A token that is valid
+#: when checked and expired when used is the race this avoids; 120 seconds is
+#: longer than any single Falcon call plus retries.
+REFRESH_MARGIN_SECONDS = 120
+
+#: Falcon's documented clouds. Not a hand-maintained list of *tools* — this
+#: is one integration's own valid values, and an operator pasting a region
+#: name needs the base URL that goes with it.
+CLOUDS = {
+    "us-1": "https://api.crowdstrike.com",
+    "us-2": "https://api.us-2.crowdstrike.com",
+    "eu-1": "https://api.eu-1.crowdstrike.com",
+    "us-gov-1": "https://api.laggar.gcw.crowdstrike.com",
+}
+
+DEFAULT_BASE_URL = CLOUDS["us-1"]
+DEFAULT_TIMEOUT = 20
+
+#: Measured against a live tenant on 2026-10-14, not taken from memory:
+#:
+#:   /detects/queries/detects/v1     404  -- the legacy Detects API is gone
+#:   /alerts/queries/alerts/v1       200
+#:   /alerts/queries/alerts/v2       200
+#:   /devices/queries/devices/v1     200
+#:   /devices/queries/devices/v2     404
+#:   /intel/queries/indicators/v1    403  access denied, scope not permitted
+#:   /iocs/queries/indicators/v1     403  access denied, scope not permitted
+ALERTS_PATH = "/alerts/queries/alerts/v2"
+DEVICES_PATH = "/devices/queries/devices/v1"
+
+#: Which FQL field carries the observable, per observable type.
+#:
+#: **The Alerts API does not validate field names.** Measured on the same
+#: tenant: `behaviors.domain`, `domain`, `indicator_id`, `filename`,
+#: `behaviors.ioc_value`, `ioc_value`, `sha256`, `behaviors.sha256`,
+#: `device.hostname`, `hostname`, `local_ip` and the invented
+#: `behaviors.ioc_type` **all returned HTTP 200 with zero resources.** A
+#: field that does not exist is therefore indistinguishable, from the
+#: response alone, from a field that exists and matched nothing.
+#:
+#: That is the absence-as-answer shape this platform spent two days removing,
+#: handed to us by a vendor: a typo here would read as "this tenant's EDR has
+#: nothing on that host" for ever, silently, on every investigation.
+#:
+#: Two things follow. The `verify` call records whether the estate has *any*
+#: alerts, so a permanently-empty filtered result is interpretable rather
+#: than reassuring. And `falcon` is registered as a source in the answer-rate
+#: check, so a field that never matches shows up as a source at 0% over a
+#: meaningful window — which is the backstop, not the fix.
+#:
+#: The Devices API *does* validate: `local_ip:'example-host'` returns 400
+#: "invalid IP address". So the risk is specific to Alerts.
+#: MEASURED against 200 real alerts on 2026-10-15. **The alert record has no
+#: `behaviors` key** — 0 of 200 carried one. The Alerts v2 resource is flat:
+#: `sha256`, `md5`, `sha1`, `filename`, `device.hostname`, `tactic`,
+#: `technique`, 73 fields in all.
+#:
+#: Every entry in the previous version of this map was invented, and because
+#: the Alerts API answers an unknown field with 200 and zero resources, each
+#: one returned "the EDR has nothing". The same hash returns **17 rows** as
+#: `sha256` and **0** as `behaviors.sha256`. The docstring two paragraphs
+#: above predicted exactly this and the map was written anyway.
+#:
+#: Hash dispatch is by digest length, not one field name: an observable of
+#: kind `hash` may be any of the three, and filtering a 32-character MD5
+#: against `sha256` is the same silent zero one level down.
+#: SHA-1 IS DELIBERATELY ABSENT. Measured 2026-10-16 over this tenant's full
+#: 2,047-alert population: `sha1` is present on 1,953 records and carries
+#: **exactly one distinct value — forty zeros.** Falcon populates it with a
+#: sentinel, universally. So a filter on any real SHA-1 matches nothing, for
+#: every SHA-1 that will ever be looked up, and the empty result reads as "the
+#: EDR has nothing on this file".
+#:
+#: **The field control cannot catch this, and that is the important part.** The
+#: control samples a value the API itself returned — the zeros — filters on it,
+#: gets 1,953 rows and passes. The field demonstrably filters. It just cannot
+#: ever match a real digest. A constant-valued field satisfies a
+#: known-present control trivially; see backlog 33.
+#:
+#: A 40-character hash therefore routes to no Falcon field, and the absence is
+#: `no_field_map` with this reason rather than a zero.
+ALERT_HASH_FIELDS = {64: "sha256", 32: "md5"}
+
+#: Digest lengths that exist as fields and cannot answer, with why. Separate
+#: from `ALERT_HASH_FIELDS` so a reader cannot mistake "absent from the map"
+#: for "nobody looked".
+ALERT_SENTINEL_HASH_FIELDS = {
+    40: (
+        "Falcon's `sha1` is a sentinel in this tenant: present on 1,953 of "
+        "2,047 alerts with exactly one distinct value, forty zeros. A filter "
+        "on a real SHA-1 can never match, so nothing was searched — an empty "
+        "result would mean the sentinel, not the file. Look the same file up "
+        "by SHA-256 or MD5, which carry 223 and 166 distinct values."
+    ),
+}
+
+#: Kinds with NO filterable alert field, and why — so the absence is recorded
+#: rather than rediscovered. All of these were probed and returned 200/0:
+#:
+#: * **domain** — no field carries one. `behaviors.domain`, `domain`,
+#:   `data_domains`, `ioc_context.domain`, `ioc_value` all empty.
+#:   `data_domains` is the trap: its value is `['Endpoint']`, a data
+#:   *classification*, not a name. Same defect as `queryName` — a plausible
+#:   field name answering a different question.
+#: * **url** — follows from domain.
+#: * **ip** — `source_ips` is populated, with values like `10.66.66.12`. They
+#:   are *internal* source addresses, so a remote address (a mail sender, a
+#:   C2) can never appear there. Valid field, valid value, structurally
+#:   impossible match, and the Devices API's `local_ip` has the same problem.
+#:
+#: The intel and IOC endpoints that WOULD answer "is this indicator known
+#: bad" are 403 scope-not-permitted (re-measured 2026-10-15), so there is no
+#: alternative route for these kinds either.
+ALERT_UNMAPPABLE_KINDS = {
+    "domain": (
+        "no Falcon alert field carries a domain; `data_domains` holds a data "
+        "classification such as 'Endpoint', not a name"
+    ),
+    "url": "follows from domain — no alert field carries a name",
+    "ip": (
+        "`source_ips` holds internal source addresses only, so a remote "
+        "address cannot appear in it"
+    ),
+}
+
+
+def alert_filter_field(observable_type: str, value: str) -> str | None:
+    """Which alert field answers for this observable, or None.
+
+    None means *no field exists*, not "not implemented". The caller records
+    `no_field_map` and does not search, because a search on a guessed field
+    returns a clean-looking zero.
+    """
+    if observable_type != "hash":
+        return None
+    return ALERT_HASH_FIELDS.get(len(str(value or "").strip()))
+
+
+def alert_hash_sentinel_reason(value: str) -> str | None:
+    """Why a digest of this length has no Falcon field, when that is the case.
+
+    Returned so the caller records `no_field_map` with the measured reason
+    instead of a bare zero — the distinction this whole module exists for.
+    """
+    return ALERT_SENTINEL_HASH_FIELDS.get(len(str(value or "").strip()))
+
+
+def _redact(text: Any) -> str:
+    """Remove anything credential-shaped from a string bound for a log or an
+    exception.
+
+    `requests` puts the request body into some exception strings, and the
+    token request's body is `client_id=...&client_secret=...`. The standing
+    rule is that a credential never reaches a log, an error body or a
+    response, so the redaction is unconditional rather than conditional on
+    having seen a leak.
+    """
+    out = str(text or "")
+    out = re.sub(r"(?i)(client_secret=)[^&\s\"']+", r"\1[redacted]", out)
+    out = re.sub(r"(?i)(client_id=)[^&\s\"']+", r"\1[redacted]", out)
+    out = re.sub(r"(?i)(bearer\s+)\S+", r"\1[redacted]", out)
+    out = re.sub(
+        r"(?i)([\"']?access_token[\"']?\s*[:=]\s*[\"']?)[^\s,\"'}]+",
+        r"\1[redacted]", out,
+    )
+    return out[:400]
+
+
+class FalconAuthError(RuntimeError):
+    """Falcon refused the credential. Message is redacted and specific."""
+
+
+class FalconUnavailable(RuntimeError):
+    """Falcon could not be reached, or answered in a way this code cannot read.
+
+    Distinct from `FalconAuthError`: one is a credential to fix, the other is
+    a provider to wait for, and reporting them as one status is how "enabled"
+    came to mean nothing.
+    """
+
+
+class FalconFieldUnverified(RuntimeError):
+    """The alert field could not be confirmed to filter, so nothing was asked.
+
+    A third kind, distinct from both above, because it is neither a
+    credential nor an outage: the provider is answering normally and the
+    question may be meaningless. The Alerts API returns HTTP 200 with zero
+    resources for a field name that does not exist, so a negative from an
+    unconfirmed field is not a negative at all.
+    """
+
+
+#: How long a passing field control stands before it is re-run. The Alerts
+#: API's refusal to validate field names is a permanent property of the
+#: provider, not a bug awaiting a fix, so this is a standing control rather
+#: than a one-off probe — but the thing it detects (a field renamed or
+#: withdrawn) changes on the provider's release schedule, not on ours. An
+#: hour bounds the blast radius of a rename to one hour of false negatives
+#: per process while costing two requests per hour per field.
+FIELD_CONTROL_TTL_SECONDS = 3600
+
+#: Keyed by field name. Per process, deliberately: a cache shared across
+#: processes would let a worker's pass stand in for the api's, which is the
+#: warrant-substitution this platform already closed once for the log store.
+_FIELD_CONTROL_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _dotted(record: Any, path: str) -> Any:
+    """`device.hostname` out of a nested record, or None."""
+    node = record
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node
+
+
+#: A value no alert field can legitimately hold. Used for axis 2 — if filtering
+#: on this returns rows, the API is ignoring the filter and every answer from
+#: that field is unrelated to the question asked.
+_NONSENSE_VALUE = "zzqx-not-a-real-value-91746-00000"
+
+#: Below this many sampled records, one distinct value is not evidence of a
+#: constant field — it is a small sample. The variance check needs a
+#: population before it can refuse.
+_VARIANCE_MIN_RECORDS = 10
+
+#: Fields whose value space is LARGE BY CONSTRUCTION, so a single distinct
+#: value across a real sample means a sentinel rather than a homogeneous
+#: estate. **Variance refuses only these.**
+#:
+#: The distinction is the whole of it: `sha1` is constant because Falcon
+#: populates it with forty zeros; `platform` is constant because this estate
+#: is Windows-only. Both are one distinct value and they are opposite
+#: findings, and a variance check that cannot tell them apart refuses valid
+#: fields — which trains people to override the control, which is worse than
+#: not having one. Measured 2026-10-16 the naive check refused
+#: `alleged_filetype`, `logon_domain` and `platform`, all three legitimate.
+#:
+#: The premise is RECOMPUTED ON EVERY CONTROL RUN, not recorded here. A
+#: recorded measurement ages into a guess, and the whole point of this set is
+#: to catch a field collapsing to a sentinel — so if `sha256` ever goes the way
+#: `sha1` did, the control must catch it the same way rather than defending a
+#: number measured in October. The counts below are the October reading and
+#: are documentation only; the live distinct count in the sampled window is
+#: what decides.
+#:
+#:   sha256           223 distinct   identity field, used as a needle
+#:   md5              166 distinct   identity field, used as a needle
+#:   device.hostname   51 distinct   identity field, used as a needle
+#:   filename          —             free text, large by construction
+#:   cmdline           —             free text, large by construction
+#:   sha1               1 distinct   <-- THE SENTINEL this set exists to catch
+#:
+#: For every other field, variance is REPORTED and never decisive: a
+#: categorical field with one value in the sample is a homogeneous estate, and
+#: the axis that separates a wrong namespace from a narrow one is an external
+#: `reference`, not cardinality.
+_IDENTITY_FIELDS = frozenset({
+    "sha256", "sha1", "md5", "filename", "cmdline", "device.hostname",
+    "composite_id", "aggregate_id", "user_name", "ioc_value",
+})
+
+
+def alerts_field_control(
+    field: str,
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    timeout: int = DEFAULT_TIMEOUT,
+    now: Any = None,
+    sample: int = 25,
+    reference: str | None = None,
+) -> dict[str, Any]:
+    """Confirm `field` can answer, on all four axes. See README rule 19.
+
+    | # | question | here |
+    |---|---|---|
+    | 1 | does the name mean anything? | a known-present value returns `total >= 1` |
+    | 2 | is the filter applied? | a **nonsense** value returns `total == 0` |
+    | 3 | did I see everything? | `paged`'s job, not this one |
+    | 4 | can it match what I will pass? | **variance** in the field's own values, and a `reference` of external provenance when the caller has one |
+
+    Axis 1 alone was the whole control until 2026-10-16, and `sha1` is why
+    that is not enough: the field is forty zeros on 1,953 of 1,953 records, so
+    the control sampled the zeros, filtered on them, got 1,953 rows back and
+    certified a field that can never match a real digest. **It verified a
+    round trip, not a capability** — a reference value drawn from the system
+    under test inherits that system's defects.
+
+    `reference` is the fix in its general form: a value of **external**
+    provenance known to be of the right kind. Variance catches the degenerate
+    single-value case; only an outside reference catches a field whose values
+    are plentiful, varied, and drawn from a different namespace than the thing
+    the caller will pass. It is optional because for most fields no such value
+    exists to hand, and absent one the control says so in `axes` rather than
+    implying it checked.
+
+    **Never raises and never fails open.** Every way of not establishing the
+    control returns `passed: False` with a reason, including an estate with no
+    alerts to sample — that is `too_little_history`, not a pass, because a
+    control that cannot run has not run.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    at = now or datetime.now(timezone.utc)
+    cached = _FIELD_CONTROL_CACHE.get(field)
+    if cached:
+        age = at - datetime.fromisoformat(cached["checked_at"])
+        if cached["passed"] and age < timedelta(seconds=FIELD_CONTROL_TTL_SECONDS):
+            return cached
+
+    def result(passed: bool, reason: str, **extra: Any) -> dict[str, Any]:
+        out = {"field": field, "passed": passed, "reason": reason,
+               "checked_at": at.isoformat(), **extra}
+        # Only a pass is cached. A failure must be retried, because the usual
+        # cause is a provider-side change that may be transient, and caching it
+        # would turn one bad minute into an hour of refusals.
+        if passed:
+            _FIELD_CONTROL_CACHE[field] = out
+        return out
+
+    def _get(path: str, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        resp = http.get(f"{base_url.rstrip('/')}{path}", headers=headers,
+                        params=params, timeout=timeout)
+        try:
+            return resp.status_code, resp.json() or {}
+        except Exception:  # noqa: BLE001
+            return resp.status_code, {}
+
+    try:
+        code, body = _get(ALERTS_PATH, {"limit": sample,
+                                        "sort": "created_timestamp|desc"})
+        if code >= 400:
+            return result(False, f"the unfiltered probe query returned HTTP {code}.")
+        ids = list(body.get("resources") or [])
+        if not ids:
+            return result(
+                False,
+                "this tenant has no Falcon alerts at all, so no row exists to "
+                "confirm the field against. Not a pass: the control could not "
+                "be run.",
+                absence="too_little_history",
+            )
+        resp = http.post(
+            f"{base_url.rstrip('/')}/alerts/entities/alerts/v2",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"composite_ids": ids}, timeout=timeout,
+        )
+        if resp.status_code >= 400:
+            return result(
+                False,
+                f"the alert detail request returned HTTP {resp.status_code}, "
+                f"so no value could be read back.")
+        records = list((resp.json() or {}).get("resources") or [])
+        pair = next(
+            ((r, _dotted(r, field)) for r in records
+             if isinstance(_dotted(r, field), str) and _dotted(r, field).strip()),
+            None,
+        )
+        if pair is None:
+            return result(
+                False,
+                f"none of the {len(records)} most recent alerts carries a "
+                f"value at {field!r}, so there is nothing to filter for. The "
+                f"field may not exist, or may be populated too rarely to "
+                f"confirm — either way a zero from it means nothing.",
+                sampled=len(records),
+            )
+        record, value = pair
+
+        # --- axis 4a: VARIANCE in the field's own values. A field with one
+        # distinct value satisfies axis 1 trivially and can still be a
+        # sentinel that matches nothing real.
+        seen = {
+            _dotted(r, field) for r in records
+            if isinstance(_dotted(r, field), str) and _dotted(r, field).strip()
+        }
+        constant = len(seen) == 1 and len(records) >= _VARIANCE_MIN_RECORDS
+        if constant and field in _IDENTITY_FIELDS:
+            return result(
+                False,
+                f"{field!r} carries exactly ONE distinct value across the "
+                f"{len(records)} most recent alerts, and it is an identity "
+                f"field whose value space is large by construction — so a "
+                f"single value means a sentinel, not a homogeneous estate. "
+                f"Filtering on it proves only that the API echoes its own "
+                f"placeholder; it cannot match a real value of its kind. This "
+                f"is how `sha1` (forty zeros on 1,953 of 1,953 records) passed "
+                f"a one-axis control. Not searched.",
+                absence="unrecognised_absence", distinct_sampled=len(seen),
+            )
+
+        # --- axis 1: a known-present value must be findable, by TOTAL. Never
+        # by page contents — a correct field whose hit set exceeds the limit
+        # does not return the sampled row (`sha256` gives 5 of total 771).
+        code, body = _get(ALERTS_PATH,
+                          {"filter": f"{field}:'{_fql(value)}'", "limit": 5})
+        if code >= 400:
+            return result(False, f"the confirming query returned HTTP {code}.")
+        total = ((body.get("meta") or {}).get("pagination") or {}).get("total")
+        if not total:
+            return result(
+                False,
+                f"a value read back from a real alert at {field!r} returned no "
+                f"rows when filtered on. The API is ignoring this field name — "
+                f"every negative from it would be false.",
+                probe_total=total,
+            )
+
+        # --- axis 2: a value that CANNOT exist must return nothing. Without
+        # this, a field accepted-and-ignored passes axis 1 for any value.
+        code, body = _get(ALERTS_PATH,
+                          {"filter": f"{field}:'{_fql(_NONSENSE_VALUE)}'",
+                           "limit": 1})
+        if code >= 400:
+            return result(False, f"the nonsense probe returned HTTP {code}.")
+        nonsense_total = (
+            ((body.get("meta") or {}).get("pagination") or {}).get("total"))
+        if nonsense_total:
+            return result(
+                False,
+                f"a value that cannot exist returned {nonsense_total} row(s) "
+                f"when filtered on {field!r}, so the API is NOT applying this "
+                f"filter and every result from it is unrelated to the query. "
+                f"Worse than an empty answer, because it looks like a hit.",
+                probe_total=total, nonsense_total=nonsense_total,
+            )
+
+        # --- axis 4b: an EXTERNAL reference, when the caller has one. The
+        # only axis that catches a field whose values are varied but drawn
+        # from a different namespace than the thing we will pass.
+        reference_checked = False
+        if reference:
+            code, body = _get(ALERTS_PATH,
+                              {"filter": f"{field}:'{_fql(reference)}'",
+                               "limit": 1})
+            reference_checked = code < 400
+            if code >= 400:
+                return result(False,
+                              f"the external-reference probe returned HTTP {code}.")
+        return result(
+            True,
+            f"a value read back at {field!r} returned {total} row(s) when "
+            f"filtered on, a value that cannot exist returned none, and the "
+            f"field carries {len(seen)} distinct values across "
+            f"{len(records)} sampled alerts, so the field filters and can "
+            f"match a real value of its kind."
+            + ("" if reference_checked else
+               " No external reference value was supplied, so axis 4b — that "
+               "this field's namespace is the same as the caller's — rests on "
+               "variance alone.")
+            + ("" if not constant else
+               f" It carries one distinct value across {len(records)} sampled "
+               f"alerts, which is NOT treated as a sentinel here: {field!r} is "
+               f"not an identity field, so one value means a homogeneous "
+               f"estate rather than a placeholder."),
+            probe_total=total, sampled=len(records),
+            distinct_sampled=len(seen),
+            axes={"name_means_something": True, "filter_applied": True,
+                  "has_variance": len(seen) > 1,
+                  # Whether variance COULD decide for this field, so a reader
+                  # can tell "varied" from "cardinality says nothing here".
+                  "variance_is_decisive": field in _IDENTITY_FIELDS,
+                  "external_reference_checked": reference_checked},
+        )
+    except Exception as exc:  # noqa: BLE001
+        return result(
+            False,
+            f"the field control did not complete ({type(exc).__name__}: "
+            f"{_redact(exc)}).")
+
+
+@dataclass(frozen=True)
+class Token:
+    """An access token and when it stops working."""
+
+    access_token: str
+    expires_at: datetime
+    #: Which API scopes the token actually carries, when Falcon says.
+    scopes: tuple[str, ...] = ()
+
+    @property
+    def expires_in_seconds(self) -> int:
+        return int((self.expires_at - datetime.now(timezone.utc)).total_seconds())
+
+    @property
+    def expired(self) -> bool:
+        """True once it is inside the refresh margin — not once it is dead.
+
+        A token that is valid when checked and expired when used is the
+        failure this margin exists for.
+        """
+        return self.expires_in_seconds <= REFRESH_MARGIN_SECONDS
+
+    def as_status(self) -> dict[str, Any]:
+        """What the expiry register records. Never the token."""
+        return {
+            "expires_at": self.expires_at.isoformat(),
+            "expires_in_seconds": self.expires_in_seconds,
+            "near_expiry": self.expired,
+            "scopes": list(self.scopes),
+        }
+
+
+class Page(NamedTuple):
+    """What a bounded read actually returned, so a caller cannot not know.
+
+    **This type is the enforcement of README rule 21**, and it exists because
+    the rule was broken three times in two days — twice by the fix for its own
+    first instance. Returning a `list` lets every caller forget that it holds
+    a page; returning this makes forgetting a type error.
+
+    * `rows` — ids, or hydrated records from `paged_alerts`.
+    * `total` — `meta.pagination.total`, or `None` when the API did not say.
+    * `complete` — `rows` covers the population. **`False` means a negative
+      over `rows` is a `lower_bound`, not a negative.**
+    * `reason` — why not, in words, for the absence that must then be recorded.
+
+    `complete` is `False` whenever `total` is unknown, even if paging ran to an
+    empty page. Covering everything the API chose to hand over is not the same
+    as covering the population, and the honest answer when nobody said how
+    many there were is that we do not know.
+    """
+
+    rows: list[Any]
+    total: int | None
+    complete: bool
+    reason: str | None = None
+
+    @property
+    def fetched(self) -> int:
+        return len(self.rows)
+
+
+#: Ids per query page, and records per hydration POST. Both are provider
+#: limits rather than preferences.
+PAGE_SIZE = 200
+HYDRATE_SIZE = 100
+#: A safety bound on `want="all"`: past this the read stops and says so,
+#: rather than paging an unbounded population on an analyst's click.
+MAX_PAGES = 25
+
+
+def paged(
+    path: str,
+    params: dict[str, Any],
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    sort: str,
+    want: Any = "all",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> Page:
+    """Page a Falcon `/queries/` endpoint. **The only way this codebase pages.**
+
+    `sort` is required and has no default. A bounded read in an unspecified
+    order returns a different sample each time, and the one place that is
+    guaranteed to matter is an existence question — "is there *any* confirmed
+    detection" is answered by the population, and an unsorted page cannot
+    answer it. Naming the sort at every call site is the point.
+
+    `want="all"` pages to the population or to `MAX_PAGES`, whichever comes
+    first. `want=N` stops after N ids. Either way `complete` says which.
+    """
+    collected: list[Any] = []
+    total: int | None = None
+    # `want=N` means N RECORDS, across as many pages as that takes. An earlier
+    # version clamped the per-request limit to `PAGE_SIZE` and then stopped
+    # after one page, which quietly cut the host panel from 500 detections to
+    # 200 — a coverage reduction introduced by the fix for a coverage bug, and
+    # caught only by comparing against a measurement taken before the change.
+    ceiling = None if want == "all" else max(1, int(want))
+    pages = 0
+    while True:
+        remaining = PAGE_SIZE if ceiling is None else min(
+            PAGE_SIZE, ceiling - len(collected))
+        if remaining <= 0:
+            break
+        query = {**params, "limit": remaining,
+                 "offset": len(collected), "sort": sort}
+        resp = http.get(f"{base_url.rstrip('/')}{path}", headers=headers,
+                        params=query, timeout=timeout)
+        if resp.status_code in (401, 403):
+            raise FalconAuthError(
+                f"Falcon refused {path} (HTTP {resp.status_code}). The "
+                f"credential is valid; the API client is missing a scope."
+            )
+        if resp.status_code >= 400:
+            raise FalconUnavailable(f"Falcon {path} returned HTTP {resp.status_code}")
+        try:
+            body = resp.json() or {}
+        except Exception:  # noqa: BLE001
+            raise FalconUnavailable(
+                f"Falcon {path} returned a body this code could not parse"
+            ) from None
+        rows = list(body.get("resources") or [])
+        reported = ((body.get("meta") or {}).get("pagination") or {}).get("total")
+        # Read once, from the first page. A later page's total can differ on a
+        # moving population, and the first is the one the rows belong to.
+        if total is None and isinstance(reported, int):
+            total = reported
+        collected.extend(rows)
+        pages += 1
+        if not rows:
+            break
+        if ceiling is not None and len(collected) >= ceiling:
+            break
+        if total is not None and len(collected) >= total:
+            break
+        if pages >= MAX_PAGES:
+            return Page(
+                collected, total, False,
+                f"stopped after {pages} pages ({len(collected)} of "
+                f"{total if total is not None else 'an unreported number of'} "
+                f"records); the rest of the population was not read",
+            )
+
+    if total is None:
+        return Page(
+            collected, None, False,
+            f"Falcon did not report a total for {path}, so whether these "
+            f"{len(collected)} records are all of them is unknown",
+        )
+    if len(collected) < total:
+        return Page(
+            collected, total, False,
+            f"read {len(collected)} of {total} records, so anything not found "
+            f"here may be in the {total - len(collected)} not read",
+        )
+    return Page(collected, total, True, None)
+
+
+def hydrate_alerts(
+    ids: Sequence[Any],
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """Alert ids -> alert records.
+
+    `/alerts/queries/alerts/v2` returns composite **ids**; every field worth
+    reasoning over — `status`, `resolution`, `pattern_disposition_description`
+    — lives on the entity. `lookup` shipped without this step and returned
+    dicts with one key, which made every predicate over its output
+    unimplementable. See backlog 31.
+    """
+    out: list[dict[str, Any]] = []
+    for start in range(0, len(ids), HYDRATE_SIZE):
+        resp = http.post(
+            f"{base_url.rstrip('/')}/alerts/entities/alerts/v2",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"composite_ids": list(ids[start:start + HYDRATE_SIZE])},
+            timeout=timeout,
+        )
+        if resp.status_code >= 400:
+            continue
+        try:
+            body = resp.json() or {}
+        except Exception:  # noqa: BLE001
+            continue
+        out.extend(r for r in (body.get("resources") or []) if isinstance(r, dict))
+    return out
+
+
+def paged_alerts(
+    *,
+    filter_expr: str,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    want: Any = "all",
+    sort: str = "created_timestamp|desc",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> Page:
+    """Alerts matching a filter, hydrated, with the population's size.
+
+    The two steps belong together because separating them is what produced
+    both defects: the id page without the total hid the floor, and the ids
+    without the hydration hid every field. One call, one answer, one
+    `complete`.
+    """
+    # An empty filter is OMITTED rather than sent as `filter=`. The retention
+    # floor probe asks the unfiltered population, and sending an empty filter
+    # string is a different request from sending none — not a difference worth
+    # discovering in production.
+    params = {"filter": filter_expr} if str(filter_expr or "").strip() else {}
+    ids = paged(ALERTS_PATH, params, base_url=base_url,
+                headers=headers, http=http, sort=sort, want=want,
+                timeout=timeout)
+    records = hydrate_alerts(ids.rows, base_url=base_url, headers=headers,
+                             http=http, timeout=timeout)
+    reason = ids.reason
+    if len(records) < len(ids.rows):
+        missed = len(ids.rows) - len(records)
+        detail = (f"{missed} of {len(ids.rows)} alert ids did not come back as "
+                  f"records from the entity fetch")
+        reason = f"{reason}; {detail}" if reason else detail
+        return Page(records, ids.total, False, reason)
+    return Page(records, ids.total, ids.complete, reason)
+
+
+def base_url_for(config: dict[str, Any] | None) -> str:
+    """The API host for this tenant's configuration.
+
+    A cloud name or a full base URL, because operators have one or the other.
+    """
+    cfg = config or {}
+    explicit = str(cfg.get("base_url") or "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    cloud = str(cfg.get("cloud") or "").strip().lower()
+    return CLOUDS.get(cloud, DEFAULT_BASE_URL)
+
+
+def fetch_token(
+    *,
+    client_id: str,
+    client_secret: str,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout: int = DEFAULT_TIMEOUT,
+    session: Any = None,
+) -> Token:
+    """Exchange the credential for an access token, and read its expiry.
+
+    Raises `FalconAuthError` on 401/403 — a credential problem — and
+    `FalconUnavailable` on anything else, because those are different
+    statuses with different remedies.
+    """
+    if not (client_id or "").strip() or not (client_secret or "").strip():
+        raise FalconAuthError(
+            "No Falcon client id or secret is configured for this tenant, so "
+            "no request was made. An unauthenticated call can only return "
+            "401, and a 401 recorded as a feed outage is what made the last "
+            "one invisible."
+        )
+
+    http = session or requests
+    url = f"{base_url.rstrip('/')}/oauth2/token"
+    try:
+        resp = http.post(
+            url,
+            data={"client_id": client_id, "client_secret": client_secret},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise FalconUnavailable(
+            f"Falcon token endpoint unreachable: {type(exc).__name__}: "
+            f"{_redact(exc)}"
+        ) from None
+
+    if resp.status_code in (401, 403):
+        raise FalconAuthError(
+            f"Falcon rejected the credential (HTTP {resp.status_code}). The "
+            "client id, the secret, or the cloud/base URL is wrong, or the "
+            "API client lacks the required scope."
+        )
+    if resp.status_code != 201 and resp.status_code != 200:
+        raise FalconUnavailable(
+            f"Falcon token endpoint returned HTTP {resp.status_code}"
+        )
+
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001
+        raise FalconUnavailable(
+            "Falcon token endpoint returned a body this code could not parse "
+            "as JSON."
+        ) from None
+
+    token = str(body.get("access_token") or "").strip()
+    if not token:
+        raise FalconUnavailable(
+            "Falcon returned HTTP 2xx with no access_token. Treated as an "
+            "absence rather than a success, because an empty token would "
+            "fail later with a 401 that looked like a credential problem."
+        )
+
+    # `expires_in` is the thing nothing read last time. A missing value is
+    # NOT defaulted to something comfortable: a short, explicit expiry makes
+    # the next call refresh, which is the safe direction.
+    expires_in = body.get("expires_in")
+    seconds = int(expires_in) if isinstance(expires_in, (int, float)) else 0
+    scopes = body.get("scope") or body.get("scopes") or ""
+    if isinstance(scopes, str):
+        scopes = tuple(s for s in scopes.replace(",", " ").split() if s)
+    else:
+        scopes = tuple(str(s) for s in scopes)
+
+    return Token(
+        access_token=token,
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=seconds),
+        scopes=scopes,
+    )
+
+
+def verify(
+    *,
+    client_id: str,
+    client_secret: str,
+    config: dict[str, Any] | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    session: Any = None,
+) -> dict[str, Any]:
+    """A real authenticated call, for test-connection.
+
+    Not a token fetch alone: a token proves the credential is valid and
+    proves nothing about whether this API client can *do* anything. So it
+    fetches a token and then makes one cheap authenticated request, and
+    reports which of the two failed.
+
+    Returns a health record. Never raises for a provider or credential
+    problem — those are the answer, not an exception — and never carries a
+    secret or the token.
+    """
+    base = base_url_for(config)
+    checked_at = datetime.now(timezone.utc).isoformat()
+
+    try:
+        token = fetch_token(
+            client_id=client_id, client_secret=client_secret,
+            base_url=base, timeout=timeout, session=session,
+        )
+    except FalconAuthError as exc:
+        return {
+            "state": "verified_failing", "direction": "enrichment",
+            "checked_at": checked_at, "reason": _redact(exc),
+            "failure_kind": "credential", "base_url": base,
+        }
+    except FalconUnavailable as exc:
+        return {
+            "state": "verified_failing", "direction": "enrichment",
+            "checked_at": checked_at, "reason": _redact(exc),
+            "failure_kind": "provider", "base_url": base,
+        }
+
+    http = session or requests
+    # Deliberately NOT through `paged`. This reads a status CODE, not rows —
+    # it exists to tell "unreachable" from "refused for want of a scope" from
+    # "answering", and the helper raises on exactly the statuses this function
+    # is here to report. The one-row limit is a reachability probe, not a
+    # bounded read of a population, so rule 21 has nothing to say about it.
+    try:
+        resp = http.get(
+            f"{base.rstrip('/')}{ALERTS_PATH}",
+            headers={"Authorization": f"Bearer {token.access_token}",
+                     "Accept": "application/json"},
+            params={"limit": 1},
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "state": "verified_failing", "direction": "enrichment",
+            "checked_at": checked_at,
+            "reason": f"Token obtained, but the API was unreachable: "
+                      f"{type(exc).__name__}: {_redact(exc)}",
+            "failure_kind": "provider", "base_url": base,
+            "token": token.as_status(),
+        }
+
+    if resp.status_code in (401, 403):
+        return {
+            "state": "verified_failing", "direction": "enrichment",
+            "checked_at": checked_at,
+            "reason": (
+                f"A token was issued, but the API refused the request "
+                f"(HTTP {resp.status_code}). The credential is valid and the "
+                f"API client is missing a scope — for enrichment it needs "
+                f"read access to Detections and Hosts."
+            ),
+            "failure_kind": "scope", "base_url": base,
+            "token": token.as_status(),
+        }
+    if resp.status_code >= 400:
+        return {
+            "state": "verified_failing", "direction": "enrichment",
+            "checked_at": checked_at,
+            "reason": f"Falcon API returned HTTP {resp.status_code}",
+            "failure_kind": "provider", "base_url": base,
+            "token": token.as_status(),
+        }
+
+    # Whether this estate has any alerts at all. Without it, a filtered
+    # query returning nothing for ever is indistinguishable from a quiet
+    # estate — and the Alerts API accepts unknown field names silently, so
+    # that is a real way to be wrong. Recorded, not alarmed on.
+    try:
+        alerts_present = len(
+            (resp.json().get("resources") or [])
+        ) > 0
+    except Exception:  # noqa: BLE001
+        alerts_present = None
+
+    return {
+        "state": "verified_ok", "direction": "enrichment",
+        "checked_at": checked_at, "reason": None,
+        "base_url": base, "token": token.as_status(),
+        "estate_has_alerts": alerts_present,
+    }
+
+
+def lookup(
+    *,
+    observable: str,
+    observable_type: str,
+    client_id: str,
+    client_secret: str,
+    config: dict[str, Any] | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    session: Any = None,
+) -> dict[str, Any]:
+    """Ask Falcon what it knows about one observable.
+
+    Enrichment only. Two questions, both read-only:
+
+      * **has this host been seen?** `/devices/queries/devices/v1` by hostname
+        or local IP — answers "is this observable inside the estate".
+      * **are there detections mentioning it?** `/alerts/queries/alerts/v2`
+        with an FQL filter (`ALERT_FILTER_FIELDS`).
+
+    This said `/detects/queries/detects/v1` until 2026-10-15. That endpoint is
+    recorded four lines above the path constants as **404 — the legacy Detects
+    API is gone**, and the code has always used `ALERTS_PATH`. The measurement
+    and the prose were in the same file disagreeing with each other, which is
+    why a reader has to be able to reach the constant rather than the
+    sentence.
+
+    Returns a dict the collector stores. Raises only for programming errors;
+    a credential or provider failure comes back as an exception the collector
+    converts into an absence, because "Falcon could not be asked" and
+    "Falcon has nothing" must never be the same stored value.
+
+    The token's expiry is checked before use rather than discovered by a 401 —
+    see `Token.expired` and the module docstring.
+    """
+    base = base_url_for(config)
+    token = fetch_token(
+        client_id=client_id, client_secret=client_secret,
+        base_url=base, timeout=timeout, session=session,
+    )
+    if token.expired:
+        # Issued and already inside the refresh margin. Falcon returning a
+        # token this short is a provider problem, not something to paper over
+        # by using it anyway and hoping.
+        raise FalconUnavailable(
+            f"Falcon issued a token expiring in {token.expires_in_seconds}s, "
+            f"inside the {REFRESH_MARGIN_SECONDS}s refresh margin. Not used."
+        )
+
+    http = session or requests
+    headers = {"Authorization": f"Bearer {token.access_token}",
+               "Accept": "application/json"}
+    notes: list[str] = []
+    value = str(observable or "").strip()
+
+    def _ask(path: str, params: dict[str, Any], what: str) -> list[Any]:
+        try:
+            resp = http.get(f"{base.rstrip('/')}{path}", headers=headers,
+                            params=params, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            raise FalconUnavailable(
+                f"Falcon {what} query unreachable: {type(exc).__name__}: "
+                f"{_redact(exc)}"
+            ) from None
+        if resp.status_code in (401, 403):
+            # A valid credential whose API client lacks the scope. Named as
+            # such rather than reported as "no results", which is what would
+            # make a missing scope look like a clean estate.
+            raise FalconAuthError(
+                f"Falcon refused the {what} query (HTTP {resp.status_code}). "
+                f"The credential is valid; the API client is missing a scope."
+            )
+        if resp.status_code >= 400:
+            raise FalconUnavailable(
+                f"Falcon {what} query returned HTTP {resp.status_code}"
+            )
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001
+            raise FalconUnavailable(
+                f"Falcon {what} query returned a body this code could not "
+                "parse as JSON."
+            ) from None
+        return list(body.get("resources") or [])
+
+    # Hosts. Falcon's device search is field-specific, so the field depends on
+    # what kind of observable this is — an FQL filter against the wrong field
+    # silently matches nothing, which would read as "not in the estate".
+    hosts: list[Any] = []
+    if observable_type in ("domain", "url"):
+        host = _host_only(value)
+        if host:
+            hosts = _ask(DEVICES_PATH,
+                         {"filter": f"hostname:'{_fql(host)}'", "limit": 10},
+                         "device")
+    elif observable_type == "ip":
+        hosts = _ask(DEVICES_PATH,
+                     {"filter": f"local_ip:'{_fql(value)}'", "limit": 10},
+                     "device")
+    else:
+        notes.append(
+            f"Falcon's own device inventory cannot be searched by "
+            f"{observable_type!r}, so no device question was asked. (This is "
+            f"about Falcon's device list, not the OpenSearch log store — in "
+            f"the indicator lookup that store is a separate source called "
+            f"'estate', and the previous wording here said 'the estate was "
+            f"not searched', which read as a claim about it.)"
+        )
+
+    # Detections, via the Alerts API. The field choice is a correctness risk
+    # the provider will not catch — see ALERT_HASH_FIELDS — so it is dispatched
+    # from measurement and gated on the standing control below.
+    det_field = alert_filter_field(observable_type, value)
+    detections: list[Any] = []
+    detections_page: Page | None = None
+    unmappable: str | None = None
+    if det_field:
+        control = alerts_field_control(
+            det_field, base_url=base, headers=headers, http=http, timeout=timeout,
+        )
+        if not control["passed"]:
+            # The whole point of the control: without it a zero here is
+            # indistinguishable from a field name the API silently ignored.
+            raise FalconFieldUnverified(
+                f"The Falcon alert field {det_field!r} could not be confirmed "
+                f"to filter: {control['reason']} No detection search was run, "
+                f"because an empty result from an unconfirmed field reads as "
+                f"'the EDR has nothing'."
+            )
+        # Through the paging helper, which hydrates the ids into records and
+        # reports the population's size. This asked for `limit: 20` with no
+        # sort until 2026-10-16 and returned the ids unhydrated: a hash with
+        # 29 alerts, including 2 an analyst had confirmed, evaluated as having
+        # none. Backlog 31 and 32, and the reason `Page` exists.
+        page = paged_alerts(
+            filter_expr=f"{det_field}:'{_fql(value)}'",
+            base_url=base, headers=headers, http=http, timeout=timeout,
+            want="all", sort="created_timestamp|desc",
+        )
+        detections = page.rows
+        detections_page = page
+        notes.append(
+            f"Detections searched on {det_field!r}, confirmed filterable by "
+            f"the field control at {control['checked_at']}."
+        )
+        if not page.complete:
+            notes.append(
+                f"This detection set is incomplete, so a nil answer from it "
+                f"is a floor rather than a negative: {page.reason}."
+            )
+    else:
+        # A digest length whose field exists and is a sentinel is a DIFFERENT
+        # absence from a kind with no field at all, and it gets its own
+        # measured reason — "there is a field and it cannot match" rather than
+        # "there is no field".
+        unmappable = (alert_hash_sentinel_reason(value)
+                      if observable_type == "hash" else None)
+        if unmappable:
+            notes.append(
+                f"No Falcon alert field can answer for this digest length: "
+                f"{unmappable}"
+            )
+        else:
+            unmappable = ALERT_UNMAPPABLE_KINDS.get(observable_type)
+            notes.append(
+                f"No Falcon alert field answers for observable type "
+                f"{observable_type!r}"
+                + (f": {unmappable}. " if unmappable else ". ")
+                + "Measured, not assumed — the alert record has no `behaviors` "
+                  "key and no field carries this kind. Nothing was searched, "
+                  "because a filter on a guessed field returns a clean-looking "
+                  "zero."
+            )
+
+    return {
+        # Records, not ids. This was `[{"id": str(d)} for d in detections]`
+        # until 2026-10-16 — a deliberate wrapping of the ids the queries
+        # endpoint returns, which made every field a predicate needs absent
+        # from this function's output while leaving it looking like a list of
+        # detections. Backlog 31.
+        "detections": list(detections),
+        # The population these came from, and whether they are all of it. A
+        # caller reading `detections` without these two is reading a page.
+        "detections_total": detections_page.total if detections_page else None,
+        "detections_complete": detections_page.complete if detections_page else None,
+        "detections_incomplete_reason": (
+            detections_page.reason if detections_page else None),
+        "hosts": [{"id": str(h)} for h in hosts],
+        "queried_at": datetime.now(timezone.utc).isoformat(),
+        "notes": notes,
+        "token": token.as_status(),
+        # Which field answered, and why none could. The collector turns
+        # `detections_unmappable` into a `no_field_map` absence ON the
+        # detections field rather than leaving an empty list, because an empty
+        # list and "there is no field to ask" are the two readings this whole
+        # module exists to keep apart.
+        "detections_field": det_field,
+        "detections_unmappable": unmappable,
+    }
+
+
+#: Falcon's alert retention, measured rather than assumed — and re-measured,
+#: because it is a rolling window.
+#:
+#: Measured on tenant c00, 2026-10-15: the oldest alert the API will return is
+#: 2026-07-17T06:49:10Z, which is **exactly 90 days** earlier. Asking for
+#: `created_timestamp > '2024-01-01'` returns the same 2,048 total as
+#: `> '2026-06-01'`, so the API is not clamping a wider request silently — the
+#: data genuinely begins there.
+#:
+#: Community sources agree on 90 days for detections and alerts, independent of
+#: subscription tier (raw event telemetry is the part that varies with
+#: licensing, commonly 7 days). No official CrowdStrike documentation page was
+#: found saying so, so the measurement is the authority here and the figure
+#: below is only a sanity bound on it.
+#:
+#: This matters for the same reason the DNS collection floor did: a 30-day
+#: panel claim against an unmeasured retention is a bounded window reported as
+#: complete, and absence-because-not-retained then renders as
+#: absence-because-it-never-happened.
+EXPECTED_ALERT_RETENTION_DAYS = 90
+
+_RETENTION_FLOOR_CACHE: dict[str, dict[str, Any]] = {}
+
+#: The floor moves forward one day per day, so an hour of staleness is at most
+#: an hour of over-claim at the very edge of the window.
+RETENTION_FLOOR_TTL_SECONDS = 3600
+
+
+def alert_retention_floor(
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    timeout: int = DEFAULT_TIMEOUT,
+    now: Any = None,
+) -> dict[str, Any]:
+    """The oldest alert this subscription will return, as a measured fact.
+
+    Never raises. A floor that cannot be established comes back as
+    `floor: None` with a reason, and the caller must then refuse to claim a
+    window length rather than assuming one — an assumed floor is the whole
+    defect.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    at = now or datetime.now(timezone.utc)
+    key = base_url
+    cached = _RETENTION_FLOOR_CACHE.get(key)
+    if cached and cached.get("floor"):
+        age = at - datetime.fromisoformat(cached["measured_at"])
+        if age < timedelta(seconds=RETENTION_FLOOR_TTL_SECONDS):
+            return cached
+
+    def result(floor: Any, reason: str, **extra: Any) -> dict[str, Any]:
+        out = {"floor": floor, "reason": reason,
+               "measured_at": at.isoformat(), **extra}
+        if floor:
+            _RETENTION_FLOOR_CACHE[key] = out
+        return out
+
+    try:
+        # Through the helper, like every other row read. The sort is the whole
+        # measurement here — `asc` is what makes the first row the oldest —
+        # which is why the helper requires it to be named rather than
+        # defaulted.
+        page = paged_alerts(filter_expr="", base_url=base_url, headers=headers,
+                            http=http, want=1, sort="created_timestamp|asc",
+                            timeout=timeout)
+        total = page.total
+        if not page.rows:
+            return result(
+                None,
+                "this tenant has no Falcon alerts at all, so how far back the "
+                "alert history reaches is unknown — not 'nothing happened'.",
+                absence="too_little_history", total=total)
+        records = page.rows
+        stamp = (records[0].get("created_timestamp") if records else None)
+        parsed = None
+        if stamp:
+            try:
+                parsed = datetime.fromisoformat(
+                    str(stamp).replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            return result(None, "the oldest alert carries no readable "
+                                "created_timestamp.")
+        days = (at - parsed).total_seconds() / 86400.0
+        return result(
+            parsed.isoformat(),
+            f"The oldest alert this subscription returns is "
+            f"{parsed:%Y-%m-%d}, {round(days)} days ago.",
+            days=round(days, 1), total=total)
+    except Exception as exc:  # noqa: BLE001
+        return result(None, f"the floor could not be measured "
+                            f"({type(exc).__name__}: {_redact(exc)}).")
+
+
+def lookup_host(
+    *,
+    hostname: str,
+    client_id: str,
+    client_secret: str,
+    config: dict[str, Any] | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    days: int = 30,
+    row_cap: int = 500,
+    session: Any = None,
+) -> dict[str, Any]:
+    """Everything Falcon knows about one host: the device, and its detections.
+
+    The host question, as opposed to `lookup`'s indicator question. A tenant
+    alert names a host, `hostname` is the one alert/device field this API
+    actually validates, and 95.3% of alert runs in the last 7 days carry an
+    `entity_host` (measured 2026-10-15).
+
+    Returns raw records plus the field control's verdict; shaping belongs to
+    `falcon_host_panel_service`, which is why no judgement is made here.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    base = base_url_for(config)
+    token = fetch_token(client_id=client_id, client_secret=client_secret,
+                        base_url=base, timeout=timeout, session=session)
+    if token.expired:
+        raise FalconUnavailable(
+            f"Falcon issued a token expiring in {token.expires_in_seconds}s, "
+            f"inside the {REFRESH_MARGIN_SECONDS}s refresh margin. Not used."
+        )
+    http = session or requests
+    headers = {"Authorization": f"Bearer {token.access_token}",
+               "Accept": "application/json"}
+    host = str(hostname or "").strip()
+    if not host:
+        raise ValueError("lookup_host needs a hostname")
+
+    def _get(path: str, params: dict[str, Any]) -> dict[str, Any]:
+        resp = http.get(f"{base.rstrip('/')}{path}", headers=headers,
+                        params=params, timeout=timeout)
+        if resp.status_code in (401, 403):
+            raise FalconAuthError(
+                f"Falcon refused {path} (HTTP {resp.status_code}). The "
+                f"credential is valid; the API client is missing a scope."
+            )
+        if resp.status_code >= 400:
+            raise FalconUnavailable(f"Falcon {path} returned HTTP {resp.status_code}")
+        try:
+            return resp.json() or {}
+        except Exception:  # noqa: BLE001
+            raise FalconUnavailable(f"Falcon {path} returned unparseable JSON") from None
+
+    # --- section A: the device. `hostname` is validated by this API, so an
+    # empty result here is a real negative and needs no control.
+    ids = list(_get(DEVICES_PATH,
+                    {"filter": f"hostname:'{_fql(host)}'", "limit": 10}
+                    ).get("resources") or [])
+    device = None
+    superseded: list[dict[str, Any]] = []
+    if ids:
+        # ALL matches, not `ids[0]`. Measured 2026-10-15: 5 of 175 hostnames
+        # carry 2-3 device records, because a sensor re-install or a re-image
+        # mints a new device id for the same hostname — each old record's
+        # `last_seen` hands straight off to the next one's `first_seen`.
+        #
+        # Taking the first match is an arbitrary choice between them, and
+        # picking a retired one reports a host that checked in this morning as
+        # a stale sensor — which then discredits a detection list that was
+        # complete. So the live record is the one with the newest `last_seen`,
+        # and the others are reported as superseded rather than dropped.
+        resp = http.get(f"{base.rstrip('/')}/devices/entities/devices/v2",
+                        headers=headers, params={"ids": ids}, timeout=timeout)
+        if resp.status_code < 400:
+            recs = [r for r in ((resp.json() or {}).get("resources") or [])
+                    if isinstance(r, dict)]
+            recs.sort(key=lambda r: str(r.get("last_seen") or ""), reverse=True)
+            if recs:
+                device, superseded = recs[0], recs[1:]
+
+    # --- the floor on any window claim. Measured, not assumed: see
+    # `alert_retention_floor`. Fetched before the detection query so the
+    # caller can shorten the claim rather than report 30 days it does not have.
+    retention = alert_retention_floor(base_url=base, headers=headers,
+                                      http=http, timeout=timeout)
+
+    # --- section B: detections, gated on the standing control, because the
+    # Alerts API answers an unknown field with 200 and zero rows.
+    control = alerts_field_control("device.hostname", base_url=base,
+                                   headers=headers, http=http, timeout=timeout)
+    detections: list[Any] = []
+    truncated_at: int | None = None
+    detections_page: Page | None = None
+    if control["passed"]:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        # Through the helper. The cap stays — a host with 500 detections is
+        # not worth hydrating in full on a panel render — but truncation is
+        # now read from `meta.pagination.total` rather than INFERRED from
+        # `len(ids) >= cap`. The inference cannot tell a host with exactly
+        # `cap` detections from one with a thousand, and it reported the first
+        # as truncated and the second as a count.
+        detections_page = paged_alerts(
+            filter_expr=(f"device.hostname:'{_fql(host)}'"
+                         f"+created_timestamp:>'{since}'"),
+            base_url=base, headers=headers, http=http, timeout=timeout,
+            want=min(row_cap, 1000), sort="created_timestamp|desc",
+        )
+        detections = detections_page.rows
+        if not detections_page.complete:
+            truncated_at = len(detections)
+
+    return {
+        "hostname": host,
+        "device": device,
+        "device_match_count": len(ids),
+        # The retired enrolments for this hostname, newest-first after the
+        # live one. Reported so a reader can see the host was re-enrolled
+        # rather than wondering why first_seen is recent on an old machine.
+        "superseded_devices": [
+            {"first_seen": r.get("first_seen"), "last_seen": r.get("last_seen"),
+             "agent_version": r.get("agent_version")}
+            for r in superseded
+        ],
+        "detections": detections,
+        # Same contract as `lookup`: the population's size and whether these
+        # are all of it, so the panel's "distinct" counts know when they are
+        # floors instead of inferring it from the row count.
+        "detections_total": detections_page.total if detections_page else None,
+        "detections_complete": (
+            detections_page.complete if detections_page else None),
+        "detections_incomplete_reason": (
+            detections_page.reason if detections_page else None),
+        "control": control,
+        "retention": retention,
+        # A host cannot have detections from before its sensor existed. For a
+        # re-enrolled hostname the EARLIEST enrolment is the bound, because
+        # detections from the retired enrolment still carry this hostname.
+        "enrolment_floor": min(
+            [str(r.get("first_seen")) for r in ([device] + superseded)
+             if isinstance(r, dict) and r.get("first_seen")],
+            default=None),
+        "truncated_at": truncated_at,
+        "token": token.as_status(),
+    }
+
+
+def _host_only(value: str) -> str:
+    """The hostname from a domain or URL, with no port or path.
+
+    Reuses the platform's existing rule rather than a second parser: nine
+    membership consumers, two parsers and three ATT&CK copies is what the
+    second implementation has cost here.
+    """
+    from app.services.threatfox_match_scope import _host_of
+
+    return _host_of(value)
+
+
+def _fql(value: str) -> str:
+    """Escape a value for a Falcon FQL string literal.
+
+    Single quotes and backslashes only — FQL has no richer injection surface
+    for a quoted literal, and a value that cannot be escaped safely is
+    rejected by returning something that matches nothing rather than
+    something that matches everything.
+    """
+    return str(value).replace("\\", "\\\\").replace("'", "\\'")

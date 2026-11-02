@@ -41,7 +41,7 @@ def main():
     parser.add_argument("--timeout", "-t", type=int, default=30, help="Collector timeout in seconds")
     parser.add_argument("--json", "-j", action="store_true", help="Output JSON instead of text")
     parser.add_argument("--output", "-o", help="Save output to file")
-    parser.add_argument("--analyst", "-a", action="store_true", help="Run Claude analyst (requires ANTHROPIC_API_KEY)")
+    parser.add_argument("--analyst", "-a", action="store_true", help="Run AI analyst (requires OPENAI_API_KEY)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
@@ -113,7 +113,7 @@ def main():
     report_data = None
     if args.analyst:
         if not args.json:
-            print(f"\n  🧠 Running Claude analyst...", flush=True)
+            print(f"\n  Running AI analyst...", flush=True)
         try:
             report_data = asyncio.run(_run_analyst(evidence_data))
             if not args.json:
@@ -155,7 +155,7 @@ def main():
 
 
 async def _run_analyst(evidence_data: dict) -> dict:
-    """Run the Claude analyst on collected evidence."""
+    """Run the AI analyst on collected evidence."""
     from app.models.schemas import CollectedEvidence
     from app.analyst.orchestrator import run_analyst
 

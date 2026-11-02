@@ -1,0 +1,598 @@
+"use client";
+
+import React from "react";
+
+import { getAPIHealth, getMe, hasAdminRights, type Me } from "@/lib/api";
+import { APP_VERSION } from "@/lib/constants";
+import { type ListDensity, type ThemePreference } from "@/lib/settings";
+import type { APIHealthResponse, APIProviderHealth, APIHealthStatus } from "@/lib/types";
+import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
+import CostSection from "@/components/settings/CostSection";
+import AccountSection from "@/components/settings/AccountSection";
+import UsersSection from "@/components/settings/UsersSection";
+
+const STATUS_STYLES: Record<APIHealthStatus, { label: string; color: string; bg: string }> = {
+  healthy: { label: "Healthy", color: "#2ecc71", bg: "rgba(46,204,113,0.12)" },
+  low_quota: { label: "Low Quota", color: "#f0a050", bg: "rgba(240,160,80,0.14)" },
+  rate_limited: { label: "Rate Limited", color: "#f07050", bg: "rgba(240,112,80,0.14)" },
+  unavailable: { label: "Unavailable", color: "#fb923c", bg: "rgba(251,146,60,0.14)" },
+  not_configured: { label: "Not Configured", color: "#94a3b8", bg: "rgba(148,163,184,0.14)" },
+  configured: { label: "Configured", color: "#94a3b8", bg: "rgba(148,163,184,0.14)" },
+};
+
+const THEME_OPTIONS: Array<{ value: ThemePreference; label: string; description: string }> = [
+  { value: "dark", label: "Dark", description: "Keep the current analyst-focused dark shell." },
+  { value: "light", label: "Light", description: "Switch to a brighter daylight workspace." },
+  { value: "system", label: "System", description: "Follow your operating system preference." },
+];
+
+const DENSITY_OPTIONS: Array<{ value: ListDensity; label: string }> = [
+  { value: "comfortable", label: "Comfortable" },
+  { value: "compact", label: "Compact" },
+];
+
+function formatQuota(provider: APIProviderHealth): string {
+  if (provider.limit != null && provider.remaining != null && provider.limit_period) {
+    // A shared pool must say so on every card that reports it. Three keys on one
+    // ANY.RUN team all read "959 / 1500", which looks like three quotas of 1500
+    // and is really one — the opposite of the conclusion you would draw.
+    const shared =
+      provider.quota_scope === "shared_team" && (provider.quota_shared_with ?? 0) > 0
+        ? ` (shared with ${provider.quota_shared_with} other key${
+            provider.quota_shared_with === 1 ? "" : "s"
+          })`
+        : "";
+    return `${provider.remaining} / ${provider.limit} requests per ${provider.limit_period}${shared}`.trim();
+  }
+  if (provider.remaining == null && provider.limit == null) {
+    return provider.status === "configured" ? "Local usage only" : "Telemetry unavailable";
+  }
+  if (provider.remaining != null && provider.limit != null) {
+    return `${provider.remaining} / ${provider.limit} ${provider.unit || ""}`.trim();
+  }
+  if (provider.remaining != null) {
+    return `${provider.remaining} ${provider.unit || "remaining"}`.trim();
+  }
+  return `${provider.limit} ${provider.unit || "limit"}`.trim();
+}
+
+function formatProviderLabel(provider: APIProviderHealth): string {
+  return provider.display_name || provider.provider;
+}
+
+function formatInteger(value?: number | null): string {
+  if (value == null || Number.isNaN(value)) return "0";
+  return new Intl.NumberFormat().format(value);
+}
+
+function formatDateTime(value?: string | null): string {
+  if (!value) return "N/A";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+  return date.toLocaleString();
+}
+
+export default function SettingsPageClient() {
+  const { settings, effectiveTheme, setTheme, updateSettings } = useSettingsPreferences();
+  const [health, setHealth] = React.useState<APIHealthResponse | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  // Only to decide whether the People card belongs on this page. The API
+  // refuses these routes to an analyst regardless; this just avoids showing a
+  // panel that would only ever answer 403.
+  const [me, setMe] = React.useState<Me | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    getMe()
+      .then((who) => {
+        if (!cancelled) setMe(who);
+      })
+      .catch(() => {
+        /* not signed in, or the API is unreachable — the page says so already */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const loadHealth = React.useCallback(async (silent = false) => {
+    if (silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    try {
+      const next = await getAPIHealth();
+      setHealth(next);
+      setError(null);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load API health");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void loadHealth(false);
+  }, [loadHealth]);
+
+  React.useEffect(() => {
+    if (!settings.apiHealthAutoRefresh) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadHealth(true);
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [loadHealth, settings.apiHealthAutoRefresh]);
+
+  const generatedAt = health?.generated_at ? formatDateTime(health.generated_at) : "N/A";
+  const backendTarget = process.env.NEXT_PUBLIC_BACKEND_URL || "Proxy /api";
+
+  return (
+    <div style={{ display: "grid", gap: 22, paddingBottom: 48 }}>
+      <section
+        className="animate-in"
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          padding: "24px 26px",
+          boxShadow: "var(--shadow-sm)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
+          <div style={{ maxWidth: 700 }}>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "4px 10px",
+                borderRadius: 999,
+                background: "var(--accent-glow)",
+                color: "var(--accent)",
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                marginBottom: 12,
+              }}
+            >
+              Settings
+            </div>
+            <h1
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: 30,
+                lineHeight: 1.1,
+                color: "var(--text)",
+                marginBottom: 10,
+              }}
+            >
+              Platform settings and API health
+            </h1>
+            <p style={{ color: "var(--text-dim)", fontSize: 14, maxWidth: 620 }}>
+              Monitor external quota pressure, switch the workspace theme, and tune browser-local analyst defaults without exposing secrets or changing shared server state.
+            </p>
+          </div>
+
+          <div
+            style={{
+              minWidth: 240,
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "14px 16px",
+              display: "grid",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)" }}>
+              Current profile
+            </div>
+            <div style={{ fontSize: 14, color: "var(--text)" }}>
+              Effective theme: <strong>{effectiveTheme}</strong>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
+              Last API refresh: {generatedAt}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Where /login sends anybody carrying a generated password, so the
+          anchor has to exist and has to be the first thing they can act on. */}
+      <div id="account" style={{ scrollMarginTop: 80 }}>
+        <SectionCard
+          title="Your account"
+          description="Who you are signed in as, and the password you sign in with."
+        >
+          <AccountSection />
+        </SectionCard>
+      </div>
+
+      {hasAdminRights(me?.role) && (
+        <div id="people" style={{ scrollMarginTop: 80 }}>
+          <SectionCard
+            title="People"
+            description="Who can sign in to this platform, what they may do, and how they get in."
+          >
+            <UsersSection />
+          </SectionCard>
+        </div>
+      )}
+
+      <SectionCard title="Appearance" description="Choose how the application should render on this browser.">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+          {THEME_OPTIONS.map((option) => {
+            const active = settings.theme === option.value;
+            return (
+              <button
+                key={option.value}
+                onClick={() => setTheme(option.value)}
+                style={{
+                  textAlign: "left",
+                  padding: "16px 16px 14px",
+                  background: active ? "var(--accent-glow)" : "var(--bg-elevated)",
+                  border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
+                  borderRadius: "var(--radius)",
+                  cursor: "pointer",
+                  color: "var(--text)",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{option.label}</div>
+                <div style={{ fontSize: 12, color: "var(--text-dim)", lineHeight: 1.5 }}>{option.description}</div>
+              </button>
+            );
+          })}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="API Health"
+        description="Provider quota visibility where available, plus app-local request counts for every configured integration."
+        action={(
+          <button
+            onClick={() => void loadHealth(true)}
+            disabled={refreshing}
+            style={buttonStyle()}
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+        )}
+      >
+        {loading ? (
+          <div style={{ color: "var(--text-dim)", fontSize: 14 }}>Loading provider health…</div>
+        ) : error ? (
+          <div
+            style={{
+              padding: "14px 16px",
+              borderRadius: "var(--radius)",
+              border: "1px solid rgba(240,112,80,0.22)",
+              background: "rgba(240,112,80,0.1)",
+              color: "var(--text)",
+            }}
+          >
+            {error}
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
+            {(health?.providers || []).map((provider) => {
+              const status = STATUS_STYLES[provider.status];
+              return (
+                <article
+                  key={provider.provider}
+                  className="card-hover"
+                  style={{
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    padding: "16px 16px 14px",
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>{provider.display_name}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                        {provider.provider}
+                      </div>
+                    </div>
+                    <span
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: 999,
+                        background: status.bg,
+                        color: status.color,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        letterSpacing: "0.05em",
+                        textTransform: "uppercase",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {status.label}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                    {formatQuota(provider)}
+                  </div>
+
+                  <div style={{ display: "grid", gap: 6, fontSize: 12, color: "var(--text-dim)" }}>
+                    <InfoRow label="Configured" value={provider.configured ? "Yes" : "No"} />
+                    <InfoRow label="Requests today" value={formatInteger(provider.requests_today)} />
+                    <InfoRow label="Requests this month" value={formatInteger(provider.requests_this_month)} />
+                    <InfoRow label="Last checked" value={formatDateTime(provider.last_checked_at)} />
+                    <InfoRow label="Reset at" value={formatDateTime(provider.reset_at)} />
+                    <InfoRow label="Limit period" value={provider.limit_period || "N/A"} />
+                    {provider.per_key_month_limit != null ? (
+                      <InfoRow
+                        label="This key's allowance"
+                        value={`${formatInteger(provider.per_key_month_limit)} / month`}
+                      />
+                    ) : null}
+                    <InfoRow label="Source" value={provider.source || "N/A"} />
+                  </div>
+
+                  {provider.error ? (
+                    <div style={{ fontSize: 12, color: "#fb923c", lineHeight: 1.5 }}>{provider.error}</div>
+                  ) : null}
+
+                  {provider.details && provider.details.length > 0 ? (
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 10,
+                        marginTop: 4,
+                        paddingTop: 12,
+                        borderTop: "1px solid var(--border)",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)" }}>
+                        Key windows
+                      </div>
+                      {provider.details.map((detail) => {
+                        const detailStatus = STATUS_STYLES[detail.status];
+                        return (
+                          <div
+                            key={detail.provider}
+                            style={{
+                              background: "var(--bg-card)",
+                              border: "1px solid var(--border)",
+                              borderRadius: "var(--radius)",
+                              padding: "12px 12px 10px",
+                              display: "grid",
+                              gap: 8,
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{formatProviderLabel(detail)}</div>
+                              <span
+                                style={{
+                                  padding: "4px 9px",
+                                  borderRadius: 999,
+                                  background: detailStatus.bg,
+                                  color: detailStatus.color,
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  letterSpacing: "0.05em",
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                {detailStatus.label}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                              {formatQuota(detail)}
+                            </div>
+                            <div style={{ display: "grid", gap: 5, fontSize: 12, color: "var(--text-dim)" }}>
+                              <InfoRow label="Requests today" value={formatInteger(detail.requests_today)} />
+                              <InfoRow label="Requests this month" value={formatInteger(detail.requests_this_month)} />
+                              <InfoRow label="Limit period" value={detail.limit_period || "N/A"} />
+                              {detail.per_key_month_limit != null ? (
+                                <InfoRow
+                                  label="This key's allowance"
+                                  value={`${formatInteger(detail.per_key_month_limit)} / month`}
+                                />
+                              ) : null}
+                              <InfoRow label="Source" value={detail.source || "N/A"} />
+                            </div>
+                            {detail.error ? (
+                              <div style={{ fontSize: 12, color: "#fb923c", lineHeight: 1.5 }}>{detail.error}</div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </SectionCard>
+
+      {/* Directly after API Health, because they answer halves of one question:
+          how close a provider is to its limit, and what the avoidance
+          machinery kept us from spending against it. */}
+      <div id="cost" style={{ scrollMarginTop: 80 }}>
+        <SectionCard
+          title="Cost and quota"
+          description="What we spent on providers, and what we avoided spending."
+        >
+          <CostSection />
+        </SectionCard>
+      </div>
+
+      <SectionCard title="Workspace" description="These preferences are saved only in this browser.">
+        <div style={{ display: "grid", gap: 18 }}>
+          <ToggleRow
+            label="Investigation auto-refresh"
+            description="Allow live investigation pages to keep polling for completion details automatically."
+            checked={settings.investigationAutoRefresh}
+            onChange={(checked) => updateSettings({ investigationAutoRefresh: checked })}
+          />
+          <ToggleRow
+            label="Duplicate investigation warning"
+            description="Warn before opening a new case for an observable that already has a concluded result."
+            checked={settings.duplicateCheckWarning}
+            onChange={(checked) => updateSettings({ duplicateCheckWarning: checked })}
+          />
+          <ToggleRow
+            label="API health auto-refresh"
+            description="Refresh provider quota data every minute while this page stays open."
+            checked={settings.apiHealthAutoRefresh}
+            onChange={(checked) => updateSettings({ apiHealthAutoRefresh: checked })}
+          />
+
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Investigation list density</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {DENSITY_OPTIONS.map((option) => {
+                const active = settings.listDensity === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    onClick={() => updateSettings({ listDensity: option.value })}
+                    style={{
+                      ...buttonStyle(),
+                      background: active ? "var(--accent-glow)" : "var(--bg-elevated)",
+                      border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
+                      color: active ? "var(--accent)" : "var(--text-dim)",
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="System Info" description="Helpful runtime details for this browser session.">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+          <SystemTile label="App version" value={APP_VERSION} />
+          <SystemTile label="Backend target" value={backendTarget} />
+          <SystemTile label="Theme preference" value={settings.theme} />
+          <SystemTile label="API health snapshot" value={generatedAt} />
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  description,
+  action,
+  children,
+}: {
+  title: string;
+  description: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className="animate-fade-up"
+      style={{
+        background: "var(--bg-card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)",
+        padding: "20px 22px",
+        boxShadow: "var(--shadow-sm)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap" }}>
+        <div>
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20, color: "var(--text)", marginBottom: 6 }}>{title}</h2>
+          <p style={{ color: "var(--text-dim)", fontSize: 13, maxWidth: 640 }}>{description}</p>
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+      <span style={{ color: "var(--text-muted)" }}>{label}</span>
+      <span style={{ color: "var(--text-secondary)", textAlign: "right" }}>{value}</span>
+    </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 16,
+        padding: "14px 16px",
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        cursor: "pointer",
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>{label}</div>
+        <div style={{ fontSize: 12, color: "var(--text-dim)", lineHeight: 1.5 }}>{description}</div>
+      </div>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    </label>
+  );
+}
+
+function SystemTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        padding: "14px 16px",
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+      }}
+    >
+      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.5 }}>{value}</div>
+    </div>
+  );
+}
+
+function buttonStyle(): React.CSSProperties {
+  return {
+    padding: "10px 14px",
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius)",
+    color: "var(--text)",
+    cursor: "pointer",
+    fontWeight: 600,
+    fontSize: 12,
+  };
+}

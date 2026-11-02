@@ -17,12 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import (
     Artifact,
     Base,
+    Batch,
     CollectorResult,
     Evidence,
     Investigation,
     IOCRecord,
     LookupCache,
     Report,
+    WatchlistAlert,
+    WatchlistEntry,
 )
 
 
@@ -35,14 +38,24 @@ class InvestigationRepository:
     async def create(
         self,
         domain: str,
+        observable_type: str = "domain",
         context: Optional[str] = None,
+        client_domain: Optional[str] = None,
         max_iterations: int = 3,
+        batch_id: Optional[uuid.UUID] = None,
+        anyrun_use_residential_proxy: bool = False,
+        anyrun_proxy_country: Optional[str] = None,
     ) -> Investigation:
         inv = Investigation(
             domain=domain,
+            observable_type=observable_type,
             context=context,
+            client_domain=client_domain,
             state="created",
             max_analyst_iterations=max_iterations,
+            batch_id=batch_id,
+            anyrun_use_residential_proxy=anyrun_use_residential_proxy,
+            anyrun_proxy_country=anyrun_proxy_country,
         )
         self.session.add(inv)
         await self.session.flush()
@@ -56,16 +69,57 @@ class InvestigationRepository:
 
     async def list_all(
         self,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
         state: Optional[str] = None,
+        search: Optional[str] = None,
+        observable_type: Optional[str] = None,
+        classification: Optional[str] = None,
+        has_video: Optional[bool] = None,
     ) -> Sequence[Investigation]:
         query = select(Investigation).order_by(Investigation.created_at.desc())
         if state:
             query = query.where(Investigation.state == state)
-        query = query.limit(limit).offset(offset)
+        if search:
+            query = query.where(Investigation.domain.ilike(f"%{search}%"))
+        if observable_type:
+            query = query.where(Investigation.observable_type == observable_type)
+        if classification:
+            query = query.where(Investigation.classification == classification)
+        if has_video is not None:
+            query = query.where(
+                Investigation.sandbox_video_task_id.isnot(None) if has_video
+                else Investigation.sandbox_video_task_id.is_(None)
+            )
+        if limit is not None:
+            query = query.limit(limit).offset(offset)
         result = await self.session.execute(query)
         return result.scalars().all()
+
+    async def count(
+        self,
+        state: Optional[str] = None,
+        search: Optional[str] = None,
+        observable_type: Optional[str] = None,
+        classification: Optional[str] = None,
+        has_video: Optional[bool] = None,
+    ) -> int:
+        query = select(func.count(Investigation.id))
+        if state:
+            query = query.where(Investigation.state == state)
+        if search:
+            query = query.where(Investigation.domain.ilike(f"%{search}%"))
+        if observable_type:
+            query = query.where(Investigation.observable_type == observable_type)
+        if classification:
+            query = query.where(Investigation.classification == classification)
+        if has_video is not None:
+            query = query.where(
+                Investigation.sandbox_video_task_id.isnot(None) if has_video
+                else Investigation.sandbox_video_task_id.is_(None)
+            )
+        result = await self.session.execute(query)
+        return result.scalar() or 0
 
     async def update_state(
         self,
@@ -243,13 +297,38 @@ class ReportRepository:
         return r
 
     async def get_latest(self, investigation_id: uuid.UUID) -> Optional[Report]:
+        """The newest report.
+
+        Note what this cannot tell a caller: whether the verdict it returns
+        has always been the verdict. On a platform where verdicts change, a
+        reader who sees only the newest cannot distinguish a stable
+        assessment from one that flipped two hours ago — `live.com` went
+        malicious/high/90/block to suspicious/low/40/monitor on 2026-10-13
+        and every surface served the newest row in silence.
+
+        Callers that show a verdict to a person should use `all_for()` or
+        `app.services.verdict_history_service` beside this.
+        """
         result = await self.session.execute(
             select(Report)
             .where(Report.investigation_id == investigation_id)
-            .order_by(Report.iteration.desc())
+            .order_by(Report.iteration.desc(), Report.created_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def all_for(self, investigation_id: uuid.UUID) -> list[Report]:
+        """Every report row, so supersession can be derived.
+
+        `reports` is append-only with an iteration per re-analysis, so the
+        history is already stored — it was simply never read.
+        """
+        result = await self.session.execute(
+            select(Report)
+            .where(Report.investigation_id == investigation_id)
+            .order_by(Report.iteration.asc(), Report.created_at.asc())
+        )
+        return list(result.scalars().all())
 
 
 class ArtifactRepository:
@@ -279,6 +358,73 @@ class ArtifactRepository:
         self.session.add(a)
         await self.session.flush()
         return a
+
+
+class BatchRepository:
+    """Database operations for batch investigations."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create(
+        self,
+        name: Optional[str] = None,
+        total_domains: int = 0,
+    ) -> Batch:
+        batch = Batch(
+            name=name,
+            total_domains=total_domains,
+            status="created",
+        )
+        self.session.add(batch)
+        await self.session.flush()
+        return batch
+
+    async def get(self, batch_id: uuid.UUID) -> Optional[Batch]:
+        result = await self.session.execute(
+            select(Batch).where(Batch.id == batch_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_all(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[Batch]:
+        query = (
+            select(Batch)
+            .order_by(Batch.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self.session.execute(query)
+        return result.scalars().all()
+
+    async def update_progress(
+        self,
+        batch_id: uuid.UUID,
+        completed_count: int,
+        status: Optional[str] = None,
+    ) -> None:
+        values: dict[str, Any] = {"completed_count": completed_count}
+        if status:
+            values["status"] = status
+            if status == "completed":
+                values["completed_at"] = datetime.now(timezone.utc)
+        await self.session.execute(
+            update(Batch).where(Batch.id == batch_id).values(**values)
+        )
+
+    async def get_investigations(
+        self,
+        batch_id: uuid.UUID,
+    ) -> Sequence[Investigation]:
+        result = await self.session.execute(
+            select(Investigation)
+            .where(Investigation.batch_id == batch_id)
+            .order_by(Investigation.created_at)
+        )
+        return result.scalars().all()
 
 
 class CacheRepository:
@@ -319,3 +465,91 @@ class CacheRepository:
                 source=source,
                 expires_at=expires_at,
             ))
+
+
+class WatchlistRepository:
+    """Database operations for the domain watchlist."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create(
+        self,
+        domain: str,
+        notes: Optional[str] = None,
+        added_by: Optional[str] = None,
+    ) -> WatchlistEntry:
+        entry = WatchlistEntry(
+            domain=domain,
+            notes=notes,
+            added_by=added_by,
+            status="active",
+        )
+        self.session.add(entry)
+        await self.session.flush()
+        return entry
+
+    async def get(self, watchlist_id: uuid.UUID) -> Optional[WatchlistEntry]:
+        result = await self.session.execute(
+            select(WatchlistEntry).where(WatchlistEntry.id == watchlist_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_all(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> Sequence[WatchlistEntry]:
+        query = select(WatchlistEntry).order_by(WatchlistEntry.created_at.desc())
+        if status:
+            query = query.where(WatchlistEntry.status == status)
+        if search:
+            query = query.where(WatchlistEntry.domain.ilike(f"%{search}%"))
+        query = query.limit(limit).offset(offset)
+        result = await self.session.execute(query)
+        return result.scalars().all()
+
+    async def count(
+        self,
+        status: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> int:
+        query = select(func.count(WatchlistEntry.id))
+        if status:
+            query = query.where(WatchlistEntry.status == status)
+        if search:
+            query = query.where(WatchlistEntry.domain.ilike(f"%{search}%"))
+        result = await self.session.execute(query)
+        return result.scalar() or 0
+
+    async def update(
+        self, watchlist_id: uuid.UUID, **fields: Any
+    ) -> None:
+        await self.session.execute(
+            update(WatchlistEntry)
+            .where(WatchlistEntry.id == watchlist_id)
+            .values(**fields)
+        )
+
+    async def delete(self, watchlist_id: uuid.UUID) -> None:
+        await self.session.execute(
+            delete(WatchlistEntry).where(WatchlistEntry.id == watchlist_id)
+        )
+
+    async def get_alerts(
+        self,
+        watchlist_id: uuid.UUID,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[WatchlistAlert]:
+        query = (
+            select(WatchlistAlert)
+            .where(WatchlistAlert.watchlist_id == watchlist_id)
+            .order_by(WatchlistAlert.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self.session.execute(query)
+        return result.scalars().all()

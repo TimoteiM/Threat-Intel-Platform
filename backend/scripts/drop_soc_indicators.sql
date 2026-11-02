@@ -1,0 +1,25 @@
+-- Drops the soc_indicators table left behind by the removed SOC Graph feature.
+--
+-- DELIBERATELY NOT AN ALEMBIC MIGRATION. A file under alembic/versions/ would be
+-- applied by the next `alembic upgrade head` on every environment, and the point
+-- of keeping this table was that dropping it is your decision, not a deploy's.
+--
+-- As of the removal (2026-08-07) the table held 2167 rows collected from AI
+-- Assistant sessions. No application code reads, writes or maps it anymore — the
+-- SQLAlchemy model, the /api/soc-indicators route, the service and the frontend
+-- page are all gone — so it is inert, and leaving it costs only disk.
+--
+-- Take a backup first; this cannot be undone:
+--     docker compose exec -T postgres pg_dump -U threatintel -d threatintel \
+--         -t soc_indicators > soc_indicators_backup.sql
+--
+-- Then run:
+--     docker compose exec -T postgres psql -U threatintel -d threatintel \
+--         -f /dev/stdin < backend/scripts/drop_soc_indicators.sql
+--
+-- Note: migration 011_add_soc_indicators.py still creates this table on a fresh
+-- database. That is intentional — rewriting applied migration history is worse
+-- than an empty unused table. Run this script again after a fresh bootstrap if
+-- you want it gone there too.
+
+DROP TABLE IF EXISTS soc_indicators;

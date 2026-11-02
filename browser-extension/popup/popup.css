@@ -1,0 +1,289 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 320px;
+  min-height: 400px;
+  background: #0B1120;
+  color: #E2E8F0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #1E293B;
+  background: #0F172A;
+}
+
+.logo {
+  font-size: 14px;
+  font-weight: 700;
+  color: #60A5FA;
+  letter-spacing: -0.02em;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  color: #64748B;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.icon-btn:hover {
+  background: #1E293B;
+  color: #E2E8F0;
+}
+
+/* Current domain */
+.current-domain {
+  padding: 12px 16px;
+  background: #0F172A;
+  border-bottom: 1px solid #1E293B;
+}
+
+.current-domain label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748B;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.domain-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #60A5FA;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+  word-break: break-all;
+}
+
+/* Inputs */
+.input-group {
+  padding: 12px 16px 4px;
+}
+
+.input-group label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94A3B8;
+  margin-bottom: 6px;
+}
+
+.input-group input {
+  width: 100%;
+  padding: 8px 12px;
+  background: #1E293B;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #E2E8F0;
+  font-size: 12px;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+  outline: none;
+  margin-bottom: 8px;
+}
+
+.input-group input:focus {
+  border-color: #60A5FA;
+}
+
+.input-group input::placeholder {
+  color: #475569;
+}
+
+/* Primary button */
+.btn-primary {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 8px 16px;
+  padding: 10px;
+  background: #2563EB;
+  color: #FFFFFF;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover {
+  background: #1D4ED8;
+}
+
+.btn-primary:disabled {
+  background: #334155;
+  color: #64748B;
+  cursor: not-allowed;
+}
+
+/* Status area */
+.status-area {
+  padding: 12px 16px;
+}
+
+.status-text {
+  font-size: 12px;
+  color: #94A3B8;
+  margin-bottom: 8px;
+}
+
+.status-bar {
+  height: 4px;
+  background: #1E293B;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.status-bar-fill {
+  height: 100%;
+  background: #60A5FA;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+/* Result area */
+.result-area {
+  padding: 12px 16px;
+  margin: 0 16px;
+  background: #0F172A;
+  border-radius: 8px;
+  border: 1px solid #1E293B;
+}
+
+.result-classification {
+  font-size: 16px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+
+.result-classification.malicious { color: #F87171; }
+.result-classification.suspicious { color: #FBBF24; }
+.result-classification.benign { color: #34D399; }
+.result-classification.inconclusive { color: #94A3B8; }
+
+.result-score {
+  font-size: 12px;
+  color: #94A3B8;
+  margin-bottom: 4px;
+}
+
+.result-action {
+  font-size: 11px;
+  color: #64748B;
+  margin-bottom: 8px;
+}
+
+.result-link {
+  display: inline-block;
+  font-size: 12px;
+  color: #60A5FA;
+  text-decoration: none;
+}
+
+.result-link:hover {
+  text-decoration: underline;
+}
+
+/* Recent investigations */
+.recent-header {
+  padding: 12px 16px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748B;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.recent-list {
+  padding: 0 16px 12px;
+}
+
+.recent-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  background: #0F172A;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.recent-item:hover {
+  background: #1E293B;
+}
+
+.recent-domain {
+  font-size: 12px;
+  font-weight: 600;
+  color: #E2E8F0;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+}
+
+.recent-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+}
+
+.recent-badge.malicious {
+  background: rgba(248, 113, 113, 0.15);
+  color: #F87171;
+}
+
+.recent-badge.suspicious {
+  background: rgba(251, 191, 36, 0.15);
+  color: #FBBF24;
+}
+
+.recent-badge.benign {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34D399;
+}
+
+.recent-badge.inconclusive,
+.recent-badge.gathering,
+.recent-badge.evaluating {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94A3B8;
+}
+
+/* Settings */
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #1E293B;
+  font-weight: 600;
+}
+
+.settings-status {
+  padding: 0 16px;
+  font-size: 11px;
+  color: #34D399;
+}

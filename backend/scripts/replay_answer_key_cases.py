@@ -1,0 +1,290 @@
+"""Replay the five analyst-closed cases through the playbook and the loop.
+
+**Read-only. Nothing is written back and nothing is delivered.** No row is
+updated, no health is stamped, no narrative is generated, no case is touched.
+The only writes anywhere are the token map the boundary keeps in memory,
+which dies with the process.
+
+**The population is Expertware's own estate** — `c00`, CID
+`eed7e41845d04c26b4198f4c85f6216e`, 176 of 176 devices on an
+`expertware.net` domain. See `docs/measurements/POPULATION.md`. That is why
+this is the right first connector and why nothing here is a client result.
+
+**The answer key is five cases and it is thin in a specific way.** Of 2,526
+closed cases, five were closed by an analyst. Four are `false_positive` and
+one is `inconclusive` — **there are no true positives**. So this measures
+whether the loop agrees that nothing happened. It cannot measure whether the
+loop finds something that did. Two of the five also have no analyst recorded
+in `closed_by`, leaving three attributable to one person over two days.
+
+Budget is deliberately low: these are real API calls against a real tenant.
+"""
+from __future__ import annotations
+
+import argparse
+import pathlib
+import sys
+from collections import Counter
+
+# `backend/`, not the repo root: this script runs INSIDE the api/worker
+# container, where /app is backend/ and the repo-root scripts/ directory is
+# not mounted at all. It lived there first, and the refusal message below
+# then told the operator to run a path that does not exist in the container —
+# verify the path the consumer calls.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from sqlalchemy import create_engine, text
+
+from app.config import get_settings
+from app.services import token_boundary as tb
+from app.services.context_gathering import event_fields as ef
+from app.services.context_gathering import loop as gl
+from app.services.context_gathering import playbook as pb
+from app.services.context_gathering.falcon_source import FalconSource
+from app.services.context_gathering.siem_source import SiemSource
+
+TENANT = "c00"
+
+
+def preflight() -> None:
+    """Refuse to run where the SIEM cannot be read, instead of reporting it.
+
+    **Why this is a refusal and not a status.** Run from the host venv, every
+    SIEM query returns `unavailable` because the OpenSearch CA lives at a
+    container mount path. The loop then records `check_failed` naming the
+    source — which is correct behaviour for the loop and completely
+    misleading as a harness result: case #1050 looked like a source failure
+    when it was my shell. An environment problem recorded as evidence is the
+    same shape as every absence-as-value defect in this codebase, so the
+    harness stops rather than producing a record nobody can trust.
+
+    The check is on the actual precondition — does the CA file exist — not
+    on "am I in a container". If the mount moves, the precondition is still
+    the right question.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    problems: list[str] = []
+
+    ca = str(getattr(settings, "opensearch_ca_bundle", "") or "")
+    if ca and not pathlib.Path(ca).exists():
+        problems.append(
+            f"the OpenSearch CA bundle {ca} does not exist here, so every SIEM "
+            f"query would return `unavailable` and be recorded as a source "
+            f"failure. This path is a container mount."
+        )
+    if not getattr(settings, "opensearch_enabled", False):
+        problems.append("opensearch_enabled is false, so the SIEM source "
+                        "cannot answer anything")
+
+    if problems:
+        print("REFUSING TO RUN — the environment cannot support this harness:\n",
+              file=sys.stderr)
+        for problem in problems:
+            print(f"  * {problem}\n", file=sys.stderr)
+        print("  Run it where the mounts exist:\n\n"
+              "    docker compose exec -T -e PYTHONPATH=/app worker \\\n"
+              "      python /app/scripts/replay_answer_key_cases.py "
+              "--alerts-per-case 1\n\n"
+              "  Or pass --edr-only to replay the EDR templates alone and have\n"
+              "  the SIEM ones reported as NOT ATTEMPTED rather than failed.\n",
+              file=sys.stderr)
+        raise SystemExit(2)
+
+
+def answer_key(conn) -> list[dict]:
+    rows = conn.execute(text("""
+        SELECT case_number, entity_host, session_started_at, last_activity_at,
+               alerts_at_close, resolution, peak_score, closed_by
+        FROM alert_case_spine
+        WHERE closure_kind = 'analyst' AND tenant_id = :t
+        ORDER BY case_number"""), {"t": TENANT}).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def alerts_of(conn, case: dict) -> list[dict]:
+    """The case's alerts, reconstructed.
+
+    Membership is **not stored** — `alert_case_spine` holds the overlay and
+    `correlate_alerts` recomputes which alerts belong together on every read
+    (`docs/problems/derived-case-membership.md`). `case_read_set` has no row
+    for any of these five, so the reconstruction here is host plus session
+    window, which is the same pair the case key is built from.
+
+    That is an approximation and it is visible in the output: `reconstructed`
+    is printed next to `alerts_at_close` so the two can disagree where they
+    do.
+    """
+    rows = conn.execute(text("""
+        SELECT id::text AS run_id, event_time,
+               result_json->'alert_fields' AS fields,
+               result_json AS result_json,
+               alert_body, entity_host, entity_user
+        FROM alert_body_investigation_runs
+        WHERE tenant_id = :t AND entity_host = :h
+          AND event_time BETWEEN :a AND :b
+        ORDER BY event_time"""),
+        {"t": TENANT, "h": case["entity_host"],
+         "a": case["session_started_at"],
+         "b": case["last_activity_at"]}).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def selectors_from(result_json: dict, fields: dict, host: str,
+                  user: str | None, body: str = "") -> dict[str, str]:
+    """Real selector values for this alert. Tokenised inside `gather`.
+
+    **The hash does not live in `alert_fields`.** The first version of this
+    function looked there for `sha256`/`hash`/`file_hash` and found nothing,
+    so every `hash_prevalence` template skipped with "no hash on this alert"
+    — an absence produced by looking in the wrong place, which would have
+    been reported as a property of the alerts.
+
+    Measured: `alert_fields` carries agent, event_id, rule_id/name, manager,
+    agent_ip, user and severities, and no indicator at all. The extracted
+    indicators are in `indicator_reports[].indicator`, typed `ip`, `domain`
+    or `hash` — 168 hash indicators across 300 sampled runs on the
+    answer-key hosts.
+    """
+    out: dict[str, str] = {}
+    if host:
+        out["host"] = str(host)
+    principal = user or (fields or {}).get("user")
+    if principal:
+        out["user"] = str(principal)
+    for report in (result_json or {}).get("indicator_reports") or []:
+        indicator = (report or {}).get("indicator")
+        if not isinstance(indicator, dict):
+            continue
+        kind = str(indicator.get("type") or "")
+        value = str(indicator.get("value") or "")
+        if not value:
+            continue
+        # The first of each kind. A template takes one selector, and
+        # "whichever hash came first" is a choice, so it is stated rather
+        # than left to dict ordering downstream.
+        if kind == "hash" and "hash" not in out:
+            out["hash"] = value
+        elif kind == "ip" and "ip" not in out:
+            out["ip"] = value
+
+    # **`process` and `pipe`, read from the alert body.** Without these two,
+    # `process_tree` and `pipe_creator` skip with "no process on this alert"
+    # on every alert — the templates would be in the build and absent from
+    # the run, which reads as "asked and found nothing".
+    #
+    # Measured over the 800 most recent c00 bodies: a process path is named
+    # on 632 (79.0%) and a pipe name on 14 (1.8%), and the encoding is
+    # `image: C:\…` — colon-space, the form the shipped detectors miss. The
+    # indicator reports above do not carry either, which is why this reads
+    # the body directly.
+    if body:
+        # `source_image` second: all 113 class-10 bodies measured carry
+        # `sourceImage` and none carries `image`, and class 10 is the class
+        # whose playbook row is `process_tree`.
+        process = ef.from_text(body, "image") or ef.from_text(body, "source_image")
+        if process:
+            out["process"] = process
+        pipe = ef.from_text(body, "pipe_name")
+        if pipe:
+            out["pipe"] = pipe
+    return out
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--max-queries", type=int, default=4,
+                    help="per alert; these are real API calls")
+    ap.add_argument("--alerts-per-case", type=int, default=2,
+                    help="how many alerts of each case to replay")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="plan only: no API calls, just what WOULD be asked")
+    ap.add_argument("--edr-only", action="store_true",
+                    help="skip the SIEM source entirely and SAY SO, rather "
+                         "than letting it fail for an environment reason")
+    args = ap.parse_args()
+
+    if not args.dry_run and not args.edr_only:
+        preflight()
+
+    engine = create_engine(get_settings().database_sync_url)
+    with engine.connect() as conn:
+        cases = answer_key(conn)
+        if args.edr_only:
+            print("  SIEM source NOT ATTEMPTED (--edr-only): the user-side\n"
+                  "  templates below are not failures, they were never asked.\n")
+        print(f"answer key: {len(cases)} analyst-closed cases on {TENANT} "
+              f"(Expertware's own estate)\n")
+        resolutions = Counter(c["resolution"] for c in cases)
+        print(f"  resolutions: {dict(resolutions)}")
+        print(f"  attributable to a named analyst: "
+              f"{sum(1 for c in cases if c['closed_by'])} of {len(cases)}")
+        print(f"  true positives in the key: "
+              f"{resolutions.get('true_positive', 0)}  <-- the limit of what "
+              f"this can measure\n")
+
+
+        for case in cases:
+            alerts = alerts_of(conn, case)
+            classes = Counter(
+                pb.event_class_of({"event_id": (a["fields"] or {}).get("event_id", "")})
+                or "(none)" for a in alerts)
+            print("=" * 74)
+            print(f"CASE #{case['case_number']}  resolution={case['resolution']}  "
+                  f"peak_score={case['peak_score']}  "
+                  f"closed_by={case['closed_by'] or '(not recorded)'}")
+            print(f"  alerts_at_close={case['alerts_at_close']}  "
+                  f"reconstructed={len(alerts)}  classes={dict(classes.most_common(6))}")
+            covered = [c for c in classes if c in pb.PLAYBOOK]
+            print(f"  classes with a playbook row: {covered or 'NONE'}")
+
+            for alert in alerts[: args.alerts_per_case]:
+                fields = alert["fields"] or {}
+                event_class = pb.event_class_of(fields) or "(none)"
+                sel = selectors_from(alert["result_json"], fields,
+                                     alert["entity_host"],
+                                     alert["entity_user"],
+                                     alert["alert_body"] or "")
+                chosen, skipped = pb.templates_for(event_class, sel)
+                print(f"\n    alert {alert['run_id'][:8]}  class={event_class:<6} "
+                      f"selectors={sorted(sel)}")
+                print(f"      would run : {[t.name for t in chosen]}")
+                print(f"      skipped   : "
+                      f"{[(s.get('template'), s.get('reason')) for s in skipped]}")
+                if args.dry_run:
+                    continue
+                # Per alert, because `SiemSource` needs THIS alert's time:
+                # a window centred on the wrong moment answers confidently
+                # about the wrong hours.
+                registry = {pb.EDR: FalconSource(tenant_id=TENANT)}
+                if not args.edr_only:
+                    registry[pb.SIEM] = SiemSource(
+                        tenant_id=TENANT, alert_time=alert["event_time"])
+                boundary = tb.in_memory(tenant_id=TENANT,
+                                        investigation_id=f"replay-{alert['run_id']}")
+                record = gl.gather(
+                    tenant_id=TENANT,
+                    investigation_id=f"replay-{alert['run_id']}",
+                    alert_fields=fields,
+                    selectors=sel,
+                    registry=registry,
+                    event_time=alert["event_time"],
+                    boundary=boundary,
+                    budget=gl.Budget(max_queries=args.max_queries),
+                )
+                js = record.as_json()
+                print(f"      GATHERED  : {len(record.events)} event(s), "
+                      f"{js['cost']['queries_run']} quer(ies), "
+                      f"stop={js['cost']['stop_reason']}")
+                for outcome in record.outcomes:
+                    print(f"        {outcome.origin:8} {outcome.template:24} "
+                          f"{outcome.status:12} kept={outcome.kept} "
+                          f"{(outcome.reason or '')[:46]}")
+                for note in record.notes:
+                    print(f"        note: {note}")
+            print()
+
+
+if __name__ == "__main__":
+    main()

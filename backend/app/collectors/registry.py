@@ -2,7 +2,7 @@
 Collector Registry — maps collector names to their classes.
 
 To add a new collector:
-1. Create the file (e.g., screenshot_collector.py)
+1. Create the file (e.g., my_collector.py)
 2. Import and register it here
 3. The pipeline picks it up automatically
 """
@@ -19,16 +19,33 @@ from app.collectors.whois_collector import WHOISCollector
 from app.collectors.asn_collector import ASNCollector
 from app.collectors.intel_collector import IntelCollector
 from app.collectors.vt_collector import VTCollector
+from app.collectors.threat_feeds_collector import ThreatFeedsCollector
+from app.collectors.brave_osint_collector import BraveOSINTCollector
+from app.collectors.urlscan_collector import URLScanCollector
+from app.collectors.hybrid_analysis_collector import HybridAnalysisCollector
+from app.collectors.opencti_collector import OpenCTICollector
+from app.collectors.cape_collector import CapeCollector
+from app.collectors.falcon_collector import FalconCollector
 
 
 COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
-    "dns": DNSCollector,
-    "http": HTTPCollector,
-    "tls": TLSCollector,
-    "whois": WHOISCollector,
-    "asn": ASNCollector,
-    "intel": IntelCollector,
-    "vt": VTCollector,
+    "dns":          DNSCollector,
+    "http":         HTTPCollector,
+    "tls":          TLSCollector,
+    "whois":        WHOISCollector,
+    "asn":          ASNCollector,
+    "intel":        IntelCollector,
+    "vt":           VTCollector,
+    "threat_feeds": ThreatFeedsCollector,
+    "brave_osint": BraveOSINTCollector,
+    "urlscan":      URLScanCollector,
+    "hybrid_analysis": HybridAnalysisCollector,
+    "opencti":         OpenCTICollector,
+    "cape":            CapeCollector,
+    # Per-tenant integration: declares `integration = True`, so the
+    # integrations catalogue and `source_coverage_service`'s expected set
+    # both derive it from here with no list to update.
+    "falcon":          FalconCollector,
 }
 
 
@@ -40,3 +57,12 @@ def get_collector(name: str) -> Type[BaseCollector] | None:
 def available_collectors() -> list[str]:
     """List all registered collector names."""
     return list(COLLECTOR_REGISTRY.keys())
+
+
+def get_collectors_for_type(observable_type: str) -> list[str]:
+    """Return collector names that support the given observable type."""
+    return [
+        name
+        for name, cls in COLLECTOR_REGISTRY.items()
+        if observable_type in cls.supported_types
+    ]

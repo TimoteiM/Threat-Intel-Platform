@@ -8,10 +8,72 @@ from app.api.investigations import router as investigations_router
 from app.api.sse import router as sse_router
 from app.api.enrichment import router as enrichment_router
 from app.api.export import router as export_router
+from app.api.artifacts import router as artifacts_router
+from app.api.reference_images import router as reference_images_router
+from app.api.pivots import router as pivots_router
+from app.api.batches import router as batches_router
+from app.api.attack import router as attack_router
+from app.api.dashboard import router as dashboard_router
+from app.api.iocs import router as iocs_router
+from app.api.watchlist import router as watchlist_router
+from app.api.exclusions import router as exclusions_router
+from app.api.detections import router as detections_router
+from app.api.cost import router as cost_router
+from app.api.integrations import router as integrations_router
+from app.api.whois_history import router as whois_history_router
+from app.api.geo import router as geo_router
+from app.api.ip_lookup import router as ip_lookup_router
+from app.api.clients import router as clients_router, alerts_router as client_alerts_router
+from app.api.email_investigations import router as email_investigations_router
+from app.api.alert_investigations import router as alert_investigations_router
+from app.api.indicator_lookup import router as indicator_lookup_router
+from app.api.investigation_records import router as investigation_records_router
+from app.api.assistant import router as assistant_router
+from app.api.admin import router as admin_router
+from app.api.anyrun import router as anyrun_router
+from app.api.cape import router as cape_router
+from app.api.auth import router as auth_router
+from app.api.auth_oidc import router as auth_oidc_router
 
 api_router = APIRouter()
 
+# First, so the sign-in route is registered before anything that needs it.
+# Self-gating: the module returns 404 unless GRAPH_DEBUG_ROUTE is on and
+# the secret matches, so registering it unconditionally is safe and means
+# the route cannot be missing on the one deployment someone needs it on.
+from app.api.graph_debug import router as graph_debug_router
+
+api_router.include_router(graph_debug_router)
+api_router.include_router(auth_router)
+api_router.include_router(auth_oidc_router)
 api_router.include_router(investigations_router)
 api_router.include_router(sse_router)
 api_router.include_router(enrichment_router)
 api_router.include_router(export_router)
+api_router.include_router(artifacts_router)
+api_router.include_router(reference_images_router)
+api_router.include_router(pivots_router)
+api_router.include_router(batches_router)
+api_router.include_router(attack_router)
+api_router.include_router(dashboard_router)
+api_router.include_router(iocs_router)
+api_router.include_router(watchlist_router)
+api_router.include_router(exclusions_router)
+api_router.include_router(detections_router)
+api_router.include_router(anyrun_router)
+api_router.include_router(cape_router)
+api_router.include_router(cost_router)
+# Per-tenant integrations. Admin-only writes, tenant-scoped reads, and
+# write-only secrets -- see app/api/integrations.py.
+api_router.include_router(integrations_router)
+api_router.include_router(whois_history_router)
+api_router.include_router(geo_router)
+api_router.include_router(ip_lookup_router)
+api_router.include_router(clients_router)
+api_router.include_router(client_alerts_router)
+api_router.include_router(email_investigations_router)
+api_router.include_router(alert_investigations_router)
+api_router.include_router(indicator_lookup_router)
+api_router.include_router(investigation_records_router)
+api_router.include_router(assistant_router)
+api_router.include_router(admin_router)

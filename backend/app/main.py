@@ -1,20 +1,26 @@
 """
 FastAPI application factory.
 
-Configures CORS, lifespan events, and mounts the API router.
+Configures CORS, security middleware, lifespan events, and mounts the API router.
 """
 
 from __future__ import annotations
 
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.router import api_router
 from app.config import get_settings
+from app.middleware.auth import AuthenticationMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.db.session import async_engine
 
 settings = get_settings()
 
@@ -29,11 +35,138 @@ logger = logging.getLogger(__name__)
 # ── Lifespan ──
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Threat Investigation Platform starting")
-    logger.info(f"Environment: {settings.app_env}")
-    logger.info(f"Analyst model: {settings.anthropic_model}")
+    from app.models.database import Base  # noqa: F401 — import registers all models
+
+    # ── Schema: verified, or bootstrapped on request ──
+    #
+    # This block used to run `create_all` plus 20 ALTER/CREATE statements on
+    # every boot, which needs table ownership. Since 2026-10-19 the
+    # application connects as `tip_app`, which has DML and no DDL, so it
+    # cannot do any of it — and should not: migrations are the schema
+    # authority, and this was the second one (backlog 25).
+    #
+    # Measured before switching it off: against this database `create_all`
+    # creates nothing, so the DDL had already been dead weight for every boot.
+    #
+    # `db_bootstrap_schema` is for a fresh database on a developer's machine,
+    # where the connection is the owner. It is off by default, and off is what
+    # the deployment uses.
+    if not settings.db_bootstrap_schema:
+        await _verify_schema()
+    else:
+        await _bootstrap_schema()
+
+    await _configure_runtime()
+
     yield
     logger.info("Shutting down")
+
+
+async def _bootstrap_schema() -> None:
+    """Create and alter tables. Needs an owning connection; dev only."""
+    from sqlalchemy import text
+    from app.models.database import Base
+
+    logger.warning(
+        "DB_BOOTSTRAP_SCHEMA is on: creating and altering tables at startup. "
+        "This is a second schema authority alongside Alembic (backlog 25) and "
+        "requires an owning database role."
+    )
+    async with async_engine.begin() as conn:
+        # Create any tables that don't exist yet (idempotent)
+        await conn.run_sync(Base.metadata.create_all)
+
+        # Add columns that may be missing from tables created before these fields existed.
+        # ALTER TABLE ... ADD COLUMN IF NOT EXISTS is idempotent — safe to run every boot.
+        col_migrations = [
+            "ALTER TABLE clients ADD COLUMN IF NOT EXISTS default_collectors JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE investigations ADD COLUMN IF NOT EXISTS observable_type VARCHAR(20) NOT NULL DEFAULT 'domain'",
+            "ALTER TABLE investigations ALTER COLUMN domain TYPE VARCHAR(512)",
+            "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS schedule_interval VARCHAR(20)",
+            "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS next_check_at TIMESTAMPTZ",
+            "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS risk_score_history JSONB",
+            "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS evidence_diff_json JSONB",
+            "CREATE INDEX IF NOT EXISTS idx_watchlist_next_check ON watchlist(next_check_at)",
+            # Entra ID sign-in. An account that authenticates against the
+            # directory has no password here, so the column has to give up its
+            # NOT NULL — on a table that predates single sign-on.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'local'",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS external_id VARCHAR(64)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(320)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(120)",
+            "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id ON users(external_id)",
+            "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+            # CAPE sandbox. The table itself is created by create_all; this is
+            # the index the "which detonation contacted this host" lookup needs,
+            # which SQLAlchemy cannot express as a column index.
+            "CREATE INDEX IF NOT EXISTS idx_sandbox_normalized_gin "
+            "ON sandbox_analyses USING GIN (normalized_json jsonb_path_ops)",
+            # URL detonation: CAPE fetches a URL as well as running a file, and
+            # a URL analysis has no local sample to hash.
+            "ALTER TABLE sandbox_analyses ADD COLUMN IF NOT EXISTS target_kind VARCHAR(10) NOT NULL DEFAULT 'file'",
+            "ALTER TABLE sandbox_analyses ADD COLUMN IF NOT EXISTS target_url VARCHAR(2048)",
+            "ALTER TABLE sandbox_analyses ALTER COLUMN sha256 DROP NOT NULL",
+        ]
+        for stmt in col_migrations:
+            await conn.execute(text(stmt))
+
+
+async def _verify_schema() -> None:
+    """Check the schema instead of repairing it. The default path.
+
+    The dangerous direction is a fresh or half-migrated database with
+    bootstrap off: the application would come up, every route would fail on a
+    missing table, and the logs would blame whichever query ran first. So this
+    refuses to serve, naming the remedy.
+
+    It checks the model's own table list rather than a hand-written set of
+    names — a second list of tables is a list that goes stale, and this
+    codebase has eight of those.
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from app.models.database import Base
+
+    async with async_engine.connect() as conn:
+        live = set(await conn.run_sync(lambda c: sa_inspect(c).get_table_names()))
+
+    missing = sorted(set(Base.metadata.tables) - live)
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} table(s) the models require are not in the "
+            f"database: {', '.join(missing[:10])}"
+            f"{'...' if len(missing) > 10 else ''}. Migrations are the schema "
+            f"authority — run `alembic upgrade head` (which uses "
+            f"DATABASE_MIGRATION_URL, the owning connection). Set "
+            f"DB_BOOTSTRAP_SCHEMA=true only on a developer database whose "
+            f"connection owns its tables."
+        )
+    logger.info("Schema verified: %d model tables present", len(Base.metadata.tables))
+
+
+async def _configure_runtime() -> None:
+    """Everything after the schema is settled. No `yield` — see `lifespan`."""
+    # A session secret has to be settled before the first cookie is signed, and
+    # there has to be an account to sign in with before default-deny bites.
+    from app.security.bootstrap import (
+        ensure_bootstrap_credentials,
+        resolve_session_secret,
+        warn_on_overbroad_ingest_trust,
+    )
+
+    settings.session_secret = resolve_session_secret(settings)
+    ensure_bootstrap_credentials()
+    warn_on_overbroad_ingest_trust(settings)
+    logger.info("Authentication mode: %s", settings.auth_mode)
+
+    logger.info("Threat Investigation Platform starting")
+    logger.info(f"Environment: {settings.app_env}")
+    logger.info(f"Primary AI model: {settings.openai_model}")
+    anthropic_fallback_enabled = bool(settings.anthropic_api_key and settings.anthropic_model)
+    if anthropic_fallback_enabled:
+        logger.info(f"Anthropic fallback: enabled (model={settings.anthropic_model})")
+    else:
+        logger.info("Anthropic fallback: disabled (set ANTHROPIC_API_KEY and ANTHROPIC_MODEL)")
 
 
 # ── App ──
@@ -42,25 +175,209 @@ app = FastAPI(
     version="1.0.0",
     description="Automated domain threat investigation with evidence-based analysis",
     lifespan=lifespan,
+    # Disable auto-generated docs in production to avoid leaking schema
+    docs_url="/api/docs" if settings.is_development else None,
+    redoc_url=None,
+    # The schema lived at /openapi.json, outside /api, so the authentication
+    # middleware below would never have seen it and it was readable by anyone.
+    # Moved under /api so it is covered like everything else.
+    openapi_url="/api/openapi.json" if settings.is_development else None,
 )
 
+
+# ── Security Headers Middleware ──
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Adds defensive HTTP security headers to every response."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        if not settings.is_development:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
+# Added last so it runs first: an unauthenticated caller is turned away before
+# it can consume the rate limiter's per-IP memory or reach any route code.
+app.add_middleware(AuthenticationMiddleware)
+
+
 # ── CORS ──
+# No `allow_origin_regex`, in any environment.
+#
+# It was `r"^https?://[A-Za-z0-9\.\-]+(:\d+)?$" if settings.is_development
+# else None`, which matches EVERY hostname — and with `allow_credentials=True`
+# that permits credentialed cross-origin reads from any origin. Verified
+# against the running service on 2026-10-15: a preflight from
+# `https://evil.example.test` returned 200 with
+# `access-control-allow-origin: https://evil.example.test` and
+# `access-control-allow-credentials: true`.
+#
+# It was latent only because `tip_session` is `SameSite=Lax`, which withholds
+# the cookie from cross-site fetch — and adding TLS would have armed it, since
+# `Secure` makes `SameSite=None` reachable. That coupling is why this closes
+# before the TLS work rather than after it.
+#
+# Its stated purpose was direct frontend→backend calls bypassing the Next
+# proxy for large multipart uploads. That path **cannot work in this
+# deployment**: the firewall DROPs port 8000 for every address outside
+# `INGEST_CIDRS` (two /32s, both machine ingest callers), so no analyst
+# browser can reach it. 112 email uploads have succeeded through the proxy.
+#
+# Development gets explicit localhost origins below instead of a pattern, so
+# the invariant — never a non-None regex beside allow_credentials — holds in
+# every environment. A guard expected to fail somewhere is already half dead.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept", "Authorization", "X-Request-ID"],
 )
+
+
+# ── Global Exception Handler ──
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    Catch-all for unhandled exceptions.
+    In development: returns exception type + message for easier debugging.
+    In production: returns a generic 500 with no internal details.
+    """
+    print(
+        f"\n[EXCEPTION] {request.method} {request.url.path} → "
+        f"{type(exc).__name__}: {exc}",
+        flush=True,
+    )
+    traceback.print_exc()
+    logger.error(
+        f"Unhandled exception on {request.method} {request.url.path}: "
+        f"{type(exc).__name__}: {exc}",
+        exc_info=True,
+    )
+    if settings.is_development:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"{type(exc).__name__}: {exc}"},
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred. Please try again later."},
+    )
+
+
+from app.code_version import code_version  # noqa: E402  (after app setup)
 
 # ── Routes ──
 app.include_router(api_router)
 
 
-@app.get("/api/health")
-async def health():
+def _health_payload() -> dict:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": "1.0.0",
     }
+
+
+async def _watch_liveness() -> dict:
+    """Whether each scheduled watch is still running.
+
+    Best effort, and deliberately so. `/health` is what the container
+    healthcheck calls and what TraceCat probes before delivering, so it must
+    not start failing because a reporting query did. A database that cannot
+    answer is itself reported, as an absence with its reason, rather than
+    turned into a 500 that would restart the container.
+    """
+    try:
+        from app.db.session import AsyncSessionLocal
+        from app.services.watch_liveness_service import liveness
+
+        async with AsyncSessionLocal() as db:
+            return await liveness(db)
+    except Exception as exc:  # noqa: BLE001
+        from app.services.absence import CHECK_FAILED, absent
+
+        return {
+            "watches": absent(
+                CHECK_FAILED,
+                "Watch liveness could not be read, so this says nothing about "
+                "whether the scheduled watches are running. It is not a "
+                "statement that they are fine.",
+                raw=type(exc).__name__,
+            ).as_json(),
+        }
+
+
+@app.get("/api/health")
+async def health(x_graph_debug: str | None = Header(default=None)):
+    """Liveness. By default, exactly what it has always returned.
+
+    Diagnostics are added only for a caller presenting the secret header —
+    not a query parameter, which is a guess rather than a credential:
+    discoverable in source, and it ends up in access logs, proxy logs and
+    bookmarks. Two reasons it is gated rather than always on:
+
+    **TraceCat polls this before every delivery.** It is a contract with a
+    consumer outside this repository, and a strict parser breaks on an
+    enriched payload as readily as on a missing field. The unauthenticated
+    response is byte-for-byte what it was before the code fingerprint and the
+    watch heartbeats were added, and `test_health_contract` freezes that.
+
+    **The cron periods are the sensitive part**, more than the fingerprint. A
+    fingerprint says which version is deployed; the periods say the width of
+    the unobservation windows — how long ingestion can stop before anything
+    notices. For a platform whose job is watching whether security telemetry
+    flows, the schedule of the watchers is a map of its blind spots.
+
+    Note this *omits* rather than denies. The debug route 404s on a bad
+    header so a caller cannot learn it exists; here the liveness answer must
+    be returned whatever happens, or the gate would break the probe it is
+    attached to.
+    """
+    payload = _health_payload()
+    from app.security.diagnostics_gate import authorised
+
+    if authorised(x_graph_debug):
+        payload["diagnostics"] = {
+            "code": code_version(),
+            # Did the task run?
+            "scheduled_watches": await _watch_liveness(),
+            # "Did the source answer?" is deliberately NOT here. It is a
+            # 90-day aggregate over large JSONB documents and takes ~98
+            # seconds — the cost is per-row extraction, not the number of
+            # scans, so collapsing seven queries into one changed nothing.
+            # It belongs on a schedule with its result stored, the way the
+            # watch heartbeat works. Until then: `python -m
+            # app.cli.source_answers`. See source_answer_rate_service.
+        }
+    return payload
+
+
+@app.get("/health")
+async def health_alias(x_graph_debug: str | None = Header(default=None)):
+    """The same answer, without the /api prefix.
+
+    TraceCat's delivery template runs a preflight against /health before it
+    sends anything, and that path has never existed here — it used to 404, and
+    once default-deny went in it became a 401, because an unknown path is
+    refused before routing ever happens. Either way the preflight can only
+    fail, and a failed preflight means alerts are not sent at all.
+
+    Adding the alias rather than editing the appliance is deliberate: the
+    integrations are meant to keep working without being modified, and a
+    liveness probe is the one thing that has to answer before a caller has
+    established anything at all.
+    """
+    # Delegates rather than rebuilding the payload. The first version of the
+    # watch-liveness change edited `/api/health` and left this one returning
+    # the bare payload, so the same path answered two different things
+    # depending on the prefix — and the prefixless one is what TraceCat and
+    # every operator curl actually calls.
+    return await health(x_graph_debug=x_graph_debug)

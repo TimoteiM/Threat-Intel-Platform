@@ -24,16 +24,26 @@ logger = logging.getLogger(__name__)
 
 class TLSCollector(BaseCollector):
     name = "tls"
+    supported_types = frozenset({"domain", "url"})
 
     def _collect(self) -> TLSEvidence:
+        from urllib.parse import urlparse
+
         evidence = TLSEvidence()
+
+        # For URL type extract the hostname; for domain use directly
+        if self.observable_type == "url":
+            parsed = urlparse(self.domain)
+            tls_host = parsed.hostname or self.domain
+        else:
+            tls_host = self.domain
 
         try:
             ctx = ssl.create_default_context()
             with socket.create_connection(
-                (self.domain, 443), timeout=self.timeout
+                (tls_host, 443), timeout=self.timeout
             ) as sock:
-                with ctx.wrap_socket(sock, server_hostname=self.domain) as ssock:
+                with ctx.wrap_socket(sock, server_hostname=tls_host) as ssock:
                     der_cert = ssock.getpeercert(binary_form=True)
 
         except ssl.SSLError as e:

@@ -122,3 +122,33 @@ A suspicious domain that needs investigation.'''
         assert report.classification.value == "benign"
         assert report.findings == []
         assert report.iocs == []
+
+    def test_tolerates_string_findings_and_iocs(self):
+        text = '''{
+  "classification": "suspicious",
+  "confidence": "medium",
+  "investigation_state": "insufficient_data",
+  "primary_reasoning": "AI found suspicious infrastructure context.",
+  "legitimate_explanation": "Could be parked or misconfigured infrastructure.",
+  "malicious_explanation": "Could be abuse infrastructure.",
+  "key_evidence": "VirusTotal has suspicious vendor flags",
+  "contradicting_evidence": "No confirmed malicious sandbox verdict",
+  "data_needed": "Manual HTTP content review",
+  "findings": ["VT suspicious detections", {"id": "f2", "title": "Pivot", "description": "Registrant pivot", "severity": "medium"}],
+  "iocs": ["activelyintimate.com", {"type": "url", "value": "https://secure-louise.cole.activelyintimate.com/", "confidence": "medium"}],
+  "recommended_action": "investigate",
+  "recommended_steps": "Review related domains",
+  "risk_score": 45,
+  "risk_rationale": "Cumulative weak signals",
+  "executive_summary": "Suspicious.",
+  "technical_narrative": "Details.",
+  "recommendations_narrative": "Investigate."
+}'''
+        report = parse_response(text)
+
+        assert report.classification.value == "suspicious"
+        assert report.investigation_state.value == "insufficient_data"
+        assert len(report.findings) == 2
+        assert len(report.iocs) == 2
+        assert report.key_evidence == ["VirusTotal has suspicious vendor flags"]
+        assert report.recommended_steps == ["Review related domains"]
