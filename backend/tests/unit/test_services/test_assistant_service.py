@@ -624,3 +624,60 @@ async def test_opening_a_generated_session_by_id_is_not_filtered() -> None:
     )
     assert "source_type IN" not in query
     assert "WHERE assistant_sessions.id" in query
+
+
+# --- the SOC ticket format: where the observables sentence lands (2026-11-02) --
+
+def _svc():
+    from app.services.assistant_service import AssistantService
+    return AssistantService.__new__(AssistantService)
+
+
+_RAW = ['{"endpoint": {"name": "WS01"}, "processFilePath": "C:\\\\Temp\\\\tool.exe"}']
+
+
+def test_the_observables_sentence_goes_before_the_disposition():
+    """**The disposition must stay the last line.**
+
+    `_ensure_alert_key_observables` appends a sentence when the model omits a
+    core observable. Under the old single-section format, appending to the end
+    was correct. Under "SOC Resolution: … / Resolution: <one sentence>" the end
+    is *after* the disposition, which is the one line that goes into the
+    ticket — so the sentence has to be inserted into the narrative instead.
+    """
+    report = ("SOC Resolution:\n\nEvent 4688 recorded a process start.\n\n"
+              "Resolution:\n\nThe activity is consistent with normal administration.")
+    out = _svc()._ensure_alert_key_observables(report, _RAW)
+
+    assert "WS01" in out, "the observable was not added at all"
+    assert out.rstrip().endswith("normal administration."), (
+        "the sentence landed after the disposition, which must stay last"
+    )
+    # And it belongs in the narrative, above the disposition heading.
+    assert out.index("WS01") < out.casefold().rindex("\nresolution:")
+
+
+def test_a_report_with_no_disposition_section_still_gets_the_sentence():
+    """The complement. A model reply that omitted the `Resolution:` heading
+    must still receive the observable rather than silently losing it."""
+    report = "SOC Resolution:\n\nEvent 4688 recorded a process start."
+    out = _svc()._ensure_alert_key_observables(report, _RAW)
+    assert "WS01" in out
+
+
+def test_a_bare_reply_is_given_the_soc_heading_not_the_old_one():
+    """When the model returns no heading at all the wrapper supplies one, and
+    it must be the current format's heading — `Event Interpretation` would
+    reintroduce the section the rewrite removed."""
+    out = _svc()._ensure_alert_key_observables("Event 4688 recorded a process start.", _RAW)
+    assert out.startswith("SOC Resolution:")
+    assert "Event Interpretation" not in out
+
+
+def test_nothing_is_appended_when_the_observable_is_already_named():
+    """The dangerous direction: this helper exists to fill a gap, not to add a
+    sentence to every report. A report that already names the endpoint must be
+    returned untouched."""
+    report = ("SOC Resolution:\n\nEvent 4688 on WS01 recorded a process start.\n\n"
+              "Resolution:\n\nBenign.")
+    assert _svc()._ensure_alert_key_observables(report, _RAW) == report

@@ -284,6 +284,22 @@ WRITING_STYLE = _join(
     LENGTH_TONE_AND_CLOSING,
 )
 
+# Alert analysis writes a fixed "SOC Resolution: / Resolution:" ticket body
+# whose own prompt sets the length (120-250 words, one to two paragraphs) and
+# supplies the closing disposition line as a named section. Keeping
+# LENGTH_TONE_AND_CLOSING here would set a second, shorter target — "a clear
+# case is often two to four sentences" — and ask for a closing disposition the
+# format already has its own heading for. Same reasoning as the correlation
+# variant below: everything about WHAT reaches the page still applies, only the
+# length-and-closing rules are dropped.
+WRITING_STYLE_SOC_RESOLUTION = _join(
+    PROCESS_SUMMARIZATION,
+    INTERNAL_IP_COLLAPSE,
+    PUBLIC_IP_IDENTITY_CARD,
+    OUTCOME_OVER_REPUTATION,
+    DROP_LOW_VALUE_DETAIL,
+)
+
 # Correlation writes a multi-section incident report with its own Timeline and
 # Indicators of Compromise, so the length-and-closing rules — built around a
 # two-to-four-sentence resolution that ends on a disposition line — would fight

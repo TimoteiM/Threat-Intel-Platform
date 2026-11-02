@@ -627,8 +627,20 @@ class AssistantService:
         if hash_item:
             sentence += f" Its {hash_item[0]} is {hash_item[1]}."
 
-        if "event interpretation" not in report.casefold():
-            return f"## Event Interpretation\n\n{report.strip()} {sentence}".strip()
+        # **Insert before the disposition, never after it.**
+        #
+        # The alert-analysis format is "SOC Resolution: … / Resolution: <one
+        # sentence>", and that final line is the whole point of the ticket.
+        # Appending to the end of the report would land this sentence after the
+        # disposition, so the resolution would no longer be the last thing an
+        # analyst reads — and the observables belong with the narrative anyway.
+        folded = report.casefold()
+        marker = folded.rfind("\nresolution:")
+        if marker != -1:
+            head, tail = report[:marker], report[marker:]
+            return head.rstrip() + " " + sentence + "\n" + tail
+        if "soc resolution" not in folded:
+            return f"SOC Resolution:\n\n{report.strip()} {sentence}".strip()
         return report.rstrip() + " " + sentence
 
     @staticmethod
