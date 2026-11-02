@@ -114,10 +114,25 @@ def test_attack_mapper_still_returns_only_json():
 # ── Writing style ────────────────────────────────────────────────────────────
 
 def test_writing_style_reaches_the_alert_prompt():
+    """Everything about WHAT reaches the page still applies to alert analysis.
+
+    `LENGTH_TONE_AND_CLOSING` is deliberately excluded as of 2026-11-02, for
+    the same reason the correlation variant below excludes it: the alert mode
+    now writes a fixed SOC ticket body whose own prompt sets the length
+    (120-250 words) and supplies the closing disposition as a named
+    `Resolution:` section. Keeping it would set a second, shorter target —
+    "a clear case is often two to four sentences" — and duplicate a section
+    the format already has a heading for.
+    """
     for block in (g.PROCESS_SUMMARIZATION, g.INTERNAL_IP_COLLAPSE,
                   g.PUBLIC_IP_IDENTITY_CARD, g.OUTCOME_OVER_REPUTATION,
-                  g.DROP_LOW_VALUE_DETAIL, g.LENGTH_TONE_AND_CLOSING):
+                  g.DROP_LOW_VALUE_DETAIL):
         assert _contains(ALERT_ANALYSIS_SYSTEM_PROMPT, block)
+    assert not _contains(ALERT_ANALYSIS_SYSTEM_PROMPT, g.LENGTH_TONE_AND_CLOSING)
+    # The format supplies its own length and its own closing section instead.
+    flat = _flat(ALERT_ANALYSIS_SYSTEM_PROMPT)
+    assert "120-250 words" in flat
+    assert "one concise final disposition sentence" in flat
 
 
 def test_correlation_gets_the_style_but_not_the_resolution_length_rules():
